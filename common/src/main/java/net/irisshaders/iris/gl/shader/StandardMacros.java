@@ -4,7 +4,6 @@ import com.google.common.collect.ImmutableList;
 import com.mojang.blaze3d.opengl.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.irisshaders.iris.Iris;
-import net.irisshaders.iris.compat.dh.DHCompat;
 import net.irisshaders.iris.gl.IrisLimits;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.helpers.StringPair;
@@ -60,10 +59,6 @@ public class StandardMacros {
 		define(standardDefines, "IRIS_HAS_TRANSLUCENCY_SORTING");
 		define(standardDefines, "IRIS_TAG_SUPPORT", "2");
 
-
-		if (IrisPlatformHelpers.getInstance().isModLoaded("distanthorizons") && DHCompat.hasRenderingEnabled()) {
-			define(standardDefines, "DISTANT_HORIZONS");
-		}
 
 		if (IrisPlatformHelpers.getInstance().isModLoaded("continuity")) {
 			define(standardDefines, "IRIS_HAS_CONNECTED_TEXTURES");

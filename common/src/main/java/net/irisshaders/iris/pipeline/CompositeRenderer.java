@@ -13,6 +13,7 @@ import com.mojang.blaze3d.pipeline.DepthStencilState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.platform.CompareOp;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
@@ -53,6 +54,7 @@ import net.irisshaders.iris.shaderpack.properties.ProgramDirectives;
 import net.irisshaders.iris.shaderpack.texture.TextureStage;
 import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import net.irisshaders.iris.targets.BufferFlipper;
+import net.irisshaders.iris.targets.GpuMipmapGenerator;
 import net.irisshaders.iris.targets.RenderTarget;
 import net.irisshaders.iris.targets.RenderTargets;
 import net.irisshaders.iris.uniforms.CommonUniforms;
@@ -209,8 +211,6 @@ public class CompositeRenderer {
 	private static void setupMipmapping(net.irisshaders.iris.targets.RenderTarget target, boolean readFromAlt) {
 		if (target == null) return;
 
-		int texture = readFromAlt ? target.getAltTexture() : target.getMainTexture();
-
 		// TODO: Only generate the mipmap if a valid mipmap hasn't been generated or if we've written to the buffer
 		// (since the last mipmap was generated)
 		//
@@ -222,7 +222,8 @@ public class CompositeRenderer {
 		//
 		// Also note that this only applies to one of the two buffers in a render target buffer pair - making it
 		// unlikely that this issue occurs in practice with most shader packs.
-		IrisRenderSystem.generateMipmaps(texture, GL20C.GL_TEXTURE_2D);
+		GpuMipmapGenerator.generate(readFromAlt ? target.getAltGpuTexture() : target.getMainGpuTexture(),
+			target.getInternalFormat().getPixelFormat().isInteger() ? FilterMode.NEAREST : FilterMode.LINEAR);
 
 		target.turnOnMips(readFromAlt);
 	}

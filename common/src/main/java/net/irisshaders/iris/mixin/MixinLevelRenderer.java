@@ -21,7 +21,6 @@ import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.MojLambdas;
 import net.irisshaders.iris.NeoLambdas;
 import net.irisshaders.iris.api.v0.IrisApi;
-import net.irisshaders.iris.compat.dh.DHCompat;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.layer.IsOutlineRenderStateShard;
 import net.irisshaders.iris.layer.OuterWrappedRenderType;
@@ -44,6 +43,7 @@ import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.LevelTargetBundle;
 import net.minecraft.client.renderer.RenderBuffers;
+import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayerGroup;
@@ -118,8 +118,6 @@ public abstract class MixinLevelRenderer {
 	// all pixels.
 	@Inject(method = "render", at = @At("HEAD"))
 	private void iris$setupPipeline(GraphicsResourceAllocator resourceAllocator, DeltaTracker deltaTracker, boolean renderOutline, CameraRenderState cameraState, Matrix4fc modelViewMatrix, GpuBufferSlice terrainFog, Vector4f fogColor, boolean shouldRenderSky, CallbackInfo ci) {
-		DHCompat.checkFrame();
-
 		iris$modelMatrix.set(modelViewMatrix);
 
 		IrisTimeUniforms.updateTime();

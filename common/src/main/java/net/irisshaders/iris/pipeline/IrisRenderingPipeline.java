@@ -13,7 +13,6 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMaps;
-import net.irisshaders.iris.compat.dh.DHCompat;
 import net.irisshaders.iris.features.FeatureFlags;
 import net.irisshaders.iris.gl.GLDebug;
 import net.irisshaders.iris.gl.IrisRenderSystem;
@@ -172,7 +171,6 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 	private final ImmutableList<ImageClearPass> clearImages;
 	private final ShaderPack pack;
 	private final PackShadowDirectives shadowDirectives;
-	private final DHCompat dhCompat;
 	private final int stackSize = 0;
 	private final boolean skipAllRendering;
 	private final CloudSetting dhCloudSetting;
@@ -399,8 +397,6 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 			return builder.build();
 		};
-
-		this.dhCompat = new DHCompat(this, shadowDirectives.isDhShadowEnabled().orElse(true));
 
 		this.loadedShaders = new HashSet<>();
 
@@ -1231,7 +1227,6 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 		GlStateManager._glBindFramebuffer(GL30C.GL_FRAMEBUFFER, 0);
 
 		renderTargets.destroy();
-		dhCompat.clearPipeline();
 
 		clearImages.forEach(ImageClearPass::destroy);
 		customImages.forEach(GlImage::destroy);
@@ -1262,11 +1257,6 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 	@Override
 	public float getSunPathRotation() {
 		return sunPathRotation;
-	}
-
-	@Override
-	public DHCompat getDHCompat() {
-		return dhCompat;
 	}
 
 	public AbstractTexture getWhitePixel() {

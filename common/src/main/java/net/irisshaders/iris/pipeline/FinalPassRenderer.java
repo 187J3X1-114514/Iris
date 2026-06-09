@@ -7,6 +7,7 @@ import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.opengl.GlStateManager;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import it.unimi.dsi.fastutil.ints.IntList;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
@@ -46,6 +47,7 @@ import net.irisshaders.iris.shaderpack.properties.ProgramDirectives;
 import net.irisshaders.iris.shaderpack.texture.TextureStage;
 import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import net.irisshaders.iris.targets.Blaze3dRenderTargetExt;
+import net.irisshaders.iris.targets.GpuMipmapGenerator;
 import net.irisshaders.iris.targets.RenderTarget;
 import net.irisshaders.iris.targets.RenderTargets;
 import net.irisshaders.iris.uniforms.CommonUniforms;
@@ -169,8 +171,6 @@ public class FinalPassRenderer {
 	private static void setupMipmapping(RenderTarget target, boolean readFromAlt) {
 		if (target == null) return;
 
-		int texture = readFromAlt ? target.getAltTexture() : target.getMainTexture();
-
 		// TODO: Only generate the mipmap if a valid mipmap hasn't been generated or if we've written to the buffer
 		// (since the last mipmap was generated)
 		//
@@ -182,7 +182,8 @@ public class FinalPassRenderer {
 		//
 		// Also note that this only applies to one of the two buffers in a render target buffer pair - making it
 		// unlikely that this issue occurs in practice with most shader packs.
-		IrisRenderSystem.generateMipmaps(texture, GL20C.GL_TEXTURE_2D);
+		GpuMipmapGenerator.generate(readFromAlt ? target.getAltGpuTexture() : target.getMainGpuTexture(),
+			target.getInternalFormat().getPixelFormat().isInteger() ? FilterMode.NEAREST : FilterMode.LINEAR);
 
 		target.turnOnMips(readFromAlt);
 	}
@@ -321,6 +322,8 @@ public class FinalPassRenderer {
 	}
 
 	public void recalculateSwapPassSize() {
+		this.baseline.refreshColorAttachments();
+
 		for (SwapPass swapPass : swapPasses) {
 			RenderTarget target = renderTargets.get(swapPass.target);
 			renderTargets.destroyFramebuffer(swapPass.from);

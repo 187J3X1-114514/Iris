@@ -1,9 +1,7 @@
 package net.irisshaders.iris.uniforms;
 
 import com.mojang.blaze3d.opengl.GlStateManager;
-import com.mojang.blaze3d.systems.RenderSystem;
 import net.irisshaders.iris.Iris;
-import net.irisshaders.iris.compat.dh.DHCompat;
 import net.irisshaders.iris.gl.state.FogMode;
 import net.irisshaders.iris.gl.state.StateUpdateNotifiers;
 import net.irisshaders.iris.gl.uniform.DynamicUniformHolder;
@@ -179,10 +177,7 @@ public final class CommonUniforms {
 			})
 			.uniform1f(PER_TICK, "rainStrength", CommonUniforms::getRainStrength)
 			.uniform1f(PER_TICK, "wetness", new SmoothedFloat(directives.getWetnessHalfLife(), directives.getDrynessHalfLife(), CommonUniforms::getRainStrength, updateNotifier))
-			.uniform3d(PER_FRAME, "skyColor", CommonUniforms::getSkyColor)
-			.uniform1f(PER_FRAME, "dhFarPlane", DHCompat::getFarPlane)
-			.uniform1f(PER_FRAME, "dhNearPlane", DHCompat::getNearPlane)
-			.uniform1i(PER_FRAME, "dhRenderDistance", DHCompat::getRenderDistance);
+			.uniform3d(PER_FRAME, "skyColor", CommonUniforms::getSkyColor);
 	}
 
 	private static boolean isOnGround() {

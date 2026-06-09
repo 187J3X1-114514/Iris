@@ -5,7 +5,6 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMaps;
 import net.caffeinemc.mods.sodium.client.render.chunk.vertex.format.ChunkMeshFormats;
-import net.irisshaders.iris.compat.dh.DHCompat;
 import net.irisshaders.iris.features.FeatureFlags;
 import net.irisshaders.iris.gl.texture.TextureType;
 import net.irisshaders.iris.helpers.Tri;
@@ -216,11 +215,6 @@ public class VanillaRenderingPipeline implements WorldRenderingPipeline {
 	public float getSunPathRotation() {
 		// No sun tilt
 		return 0;
-	}
-
-	@Override
-	public DHCompat getDHCompat() {
-		return null;
 	}
 
 	@Override

@@ -1,10 +1,10 @@
 package net.irisshaders.iris.uniforms;
 
-import net.irisshaders.iris.compat.dh.DHCompat;
 import net.irisshaders.iris.gl.uniform.UniformHolder;
 import net.irisshaders.iris.shaderpack.properties.PackDirectives;
 import net.irisshaders.iris.shadows.ShadowMatrices;
 import net.irisshaders.iris.shadows.ShadowRenderer;
+import net.minecraft.client.Minecraft;
 import net.minecraft.util.Mth;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
@@ -20,15 +20,14 @@ public final class MatrixUniforms {
 	public static void addMatrixUniforms(UniformHolder uniforms, PackDirectives directives) {
 		addMatrix(uniforms, "ModelView", CapturedRenderingState.INSTANCE::getGbufferModelView);
 		addMatrix(uniforms, "Projection", CapturedRenderingState.INSTANCE::getGbufferProjection);
-        addDHMatrix(uniforms, "Projection", DHCompat::getProjection);
 		addShadowMatrix(uniforms, "ModelView", () ->
 			new Matrix4f(ShadowRenderer.createShadowModelView(directives.getSunPathRotation(), directives.getShadowDirectives().getIntervalSize(),
-				Mth.equal(directives.getShadowDirectives().getNearPlane(), -1.0f) ? -DHCompat.getRenderDistance() * 16 : directives.getShadowDirectives().getNearPlane(),
-				Mth.equal(directives.getShadowDirectives().getFarPlane(), -1.0f) ? DHCompat.getRenderDistance() * 16 : directives.getShadowDirectives().getFarPlane()
+				Mth.equal(directives.getShadowDirectives().getNearPlane(), -1.0f) ? -Minecraft.getInstance().options.getEffectiveRenderDistance() * 16 : directives.getShadowDirectives().getNearPlane(),
+				Mth.equal(directives.getShadowDirectives().getFarPlane(), -1.0f) ? Minecraft.getInstance().options.getEffectiveRenderDistance() * 16 : directives.getShadowDirectives().getFarPlane()
 			).last().pose()));
 		addShadowMatrix(uniforms, "Projection", () -> ShadowMatrices.createOrthoMatrix(directives.getShadowDirectives().getDistance(),
-			Mth.equal(directives.getShadowDirectives().getNearPlane(), -1.0f) ? -DHCompat.getRenderDistance() * 16 : directives.getShadowDirectives().getNearPlane(),
-			Mth.equal(directives.getShadowDirectives().getFarPlane(), -1.0f) ? DHCompat.getRenderDistance() * 16 : directives.getShadowDirectives().getFarPlane()));
+			Mth.equal(directives.getShadowDirectives().getNearPlane(), -1.0f) ? -Minecraft.getInstance().options.getEffectiveRenderDistance() * 16 : directives.getShadowDirectives().getNearPlane(),
+			Mth.equal(directives.getShadowDirectives().getFarPlane(), -1.0f) ? Minecraft.getInstance().options.getEffectiveRenderDistance() * 16 : directives.getShadowDirectives().getFarPlane()));
 	}
 
 	private static void addMatrix(UniformHolder uniforms, String name, Supplier<Matrix4fc> supplier) {
@@ -36,13 +35,6 @@ public final class MatrixUniforms {
 			.uniformMatrix(PER_FRAME, "gbuffer" + name, supplier)
 			.uniformMatrix(PER_FRAME, "gbuffer" + name + "Inverse", new Inverted(supplier))
 			.uniformMatrix(PER_FRAME, "gbufferPrevious" + name, new Previous(supplier));
-	}
-
-	private static void addDHMatrix(UniformHolder uniforms, String name, Supplier<Matrix4fc> supplier) {
-		uniforms
-			.uniformMatrix(PER_FRAME, "dh" + name, supplier)
-			.uniformMatrix(PER_FRAME, "dh" + name + "Inverse", new Inverted(supplier))
-			.uniformMatrix(PER_FRAME, "dhPrevious" + name, new Previous(supplier));
 	}
 
 	private static void addShadowMatrix(UniformHolder uniforms, String name, Supplier<Matrix4fc> supplier) {

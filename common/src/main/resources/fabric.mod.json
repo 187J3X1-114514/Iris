@@ -32,7 +32,6 @@
     "mixins.iris.vertexformat.json",
     "mixins.iris.bettermipmaps.json",
     "mixins.iris.compat.sodium.json",
-    "mixins.iris.compat.dh.json",
     "mixins.iris.fixes.maxfpscrash.json"
   ],
   "accessWidener": "iris.accesswidener",
@@ -70,6 +69,8 @@
     "loom:injected_interfaces": {
       "com/mojang/blaze3d/pipeline/RenderTarget": ["net/irisshaders/iris/mixinterface/RenderTargetInterface"],
       "com/mojang/blaze3d/textures/GpuTexture": ["net/irisshaders/iris/mixinterface/GpuTextureInterface"],
+      "com/mojang/blaze3d/textures/GpuSampler": ["net/irisshaders/iris/mixinterface/IrisSamplerInterface"],
+      "com/mojang/blaze3d/systems/CommandEncoder": ["net/irisshaders/iris/mixinterface/IrisCommandEncoderInterface"],
       "com/mojang/blaze3d/systems/RenderPassBackend": ["net/irisshaders/iris/mixinterface/RenderPassInterface"],
       "com/mojang/blaze3d/systems/RenderPass": ["net/irisshaders/iris/mixinterface/RenderPassInterface"],
       "net/minecraft/client/renderer/rendertype/RenderType": ["net/irisshaders/iris/mixinterface/RenderTypeInterface"],

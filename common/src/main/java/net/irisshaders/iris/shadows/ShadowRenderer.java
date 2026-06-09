@@ -6,6 +6,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.AddressMode;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
+import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.vertex.PoseStack;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import net.caffeinemc.mods.sodium.client.render.SodiumWorldRenderer;
@@ -16,7 +17,6 @@ import net.caffeinemc.mods.sodium.client.util.FogStorage;
 import net.caffeinemc.mods.sodium.client.world.LevelRendererExtension;
 import net.caffeinemc.mods.sodium.mixin.core.render.world.FrustumAccessor;
 import net.irisshaders.iris.Iris;
-import net.irisshaders.iris.compat.dh.DHCompat;
 import net.irisshaders.iris.gl.GLDebug;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.gui.option.IrisVideoSettings;
@@ -39,6 +39,7 @@ import net.irisshaders.iris.uniforms.CameraUniforms;
 import net.irisshaders.iris.uniforms.CapturedRenderingState;
 import net.irisshaders.iris.uniforms.CelestialUniforms;
 import net.irisshaders.iris.uniforms.custom.CustomUniforms;
+import net.irisshaders.iris.targets.GpuMipmapGenerator;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -231,22 +232,20 @@ public class ShadowRenderer {
 
 		GlStateManager._activeTexture(GL20C.GL_TEXTURE4);
 
-		configureDepthSampler(targets.getDepthTexture().iris$getGlId(), depthSamplingSettings.get(0));
+		configureDepthSampler(targets.getDepthTexture(), targets.getDepthTexture().iris$getGlId(), depthSamplingSettings.get(0));
 
-		configureDepthSampler(targets.getDepthTextureNoTranslucents().iris$getGlId(), depthSamplingSettings.get(1));
+		configureDepthSampler(targets.getDepthTextureNoTranslucents(), targets.getDepthTextureNoTranslucents().iris$getGlId(), depthSamplingSettings.get(1));
 
 		for (int i = 0; i < targets.getNumColorTextures(); i++) {
 			if (targets.get(i) != null) {
-				int glTextureId = targets.get(i).getMainTexture();
-
-				configureSampler(glTextureId, colorSamplingSettings.computeIfAbsent(i, a -> new PackShadowDirectives.SamplingSettings()));
+				configureSampler(targets.get(i).getMainGpuTexture(), targets.get(i).getMainTexture(), colorSamplingSettings.computeIfAbsent(i, a -> new PackShadowDirectives.SamplingSettings()));
 			}
 		}
 
 		GlStateManager._activeTexture(GL20C.GL_TEXTURE0);
 	}
 
-	private void configureDepthSampler(int glTextureId, PackShadowDirectives.DepthSamplingSettings settings) {
+	private void configureDepthSampler(GpuTexture texture, int glTextureId, PackShadowDirectives.DepthSamplingSettings settings) {
 		if (settings.getHardwareFiltering() && !separateHardwareSamplers) {
 			// We have to do this or else shadow hardware filtering breaks entirely!
 			IrisRenderSystem.texParameteri(glTextureId, GL20C.GL_TEXTURE_2D, GL20C.GL_TEXTURE_COMPARE_MODE, GL30C.GL_COMPARE_REF_TO_TEXTURE);
@@ -258,13 +257,13 @@ public class ShadowRenderer {
 		IrisRenderSystem.texParameteriv(glTextureId, GL20C.GL_TEXTURE_2D, ARBTextureSwizzle.GL_TEXTURE_SWIZZLE_RGBA,
 			new int[]{GL30C.GL_RED, GL30C.GL_RED, GL30C.GL_RED, GL30C.GL_ONE});
 
-		configureSampler(glTextureId, settings);
+		configureSampler(texture, glTextureId, settings);
 	}
 
-	private void configureSampler(int glTextureId, PackShadowDirectives.SamplingSettings settings) {
+	private void configureSampler(GpuTexture texture, int glTextureId, PackShadowDirectives.SamplingSettings settings) {
 		if (settings.getMipmap()) {
 			int filteringMode = settings.getNearest() ? GL20C.GL_NEAREST_MIPMAP_NEAREST : GL20C.GL_LINEAR_MIPMAP_LINEAR;
-			mipmapPasses.add(new MipmapPass(glTextureId, filteringMode));
+			mipmapPasses.add(new MipmapPass(texture, glTextureId, settings.getNearest() ? FilterMode.NEAREST : FilterMode.LINEAR, filteringMode));
 		}
 
 		if (!settings.getNearest()) {
@@ -281,15 +280,17 @@ public class ShadowRenderer {
 		GlStateManager._activeTexture(GL20C.GL_TEXTURE4);
 
 		for (MipmapPass mipmapPass : mipmapPasses) {
-			setupMipmappingForTexture(mipmapPass.texture(), mipmapPass.targetFilteringMode());
+			setupMipmappingForTexture(mipmapPass);
 		}
 
 		GlStateManager._activeTexture(GL20C.GL_TEXTURE0);
 	}
 
-	private void setupMipmappingForTexture(int texture, int filteringMode) {
-		IrisRenderSystem.generateMipmaps(texture, GL20C.GL_TEXTURE_2D);
-		IrisRenderSystem.texParameteri(texture, GL20C.GL_TEXTURE_2D, GL20C.GL_TEXTURE_MIN_FILTER, filteringMode);
+	private void setupMipmappingForTexture(MipmapPass mipmapPass) {
+		if (mipmapPass.texture() != null) {
+			GpuMipmapGenerator.generate(mipmapPass.texture(), mipmapPass.filterMode());
+		}
+		IrisRenderSystem.texParameteri(mipmapPass.glTextureId(), GL20C.GL_TEXTURE_2D, GL20C.GL_TEXTURE_MIN_FILTER, mipmapPass.targetFilteringMode());
 	}
 
 	private FrustumHolder createShadowFrustum(float renderMultiplier, FrustumHolder holder) {
@@ -360,7 +361,7 @@ public class ShadowRenderer {
 
 			shadowLightVectorFromOrigin.normalize();
 
-			Matrix4f projView = ((shouldRenderDH && DHCompat.hasRenderingEnabled()) ? DHCompat.getProjection() : CapturedRenderingState.INSTANCE.getGbufferProjection())
+			Matrix4f projView = (CapturedRenderingState.INSTANCE.getGbufferProjection())
 					.mul(CapturedRenderingState.INSTANCE.getGbufferModelView(), new Matrix4f());
 
 			if (hasSafeZone) {
@@ -425,7 +426,7 @@ public class ShadowRenderer {
 			// If FOV is not null, the pack wants a perspective based projection matrix. (This is to support legacy packs)
 			shadowProjection = ShadowMatrices.createPerspectiveMatrix(this.fov);
 		} else {
-			shadowProjection = ShadowMatrices.createOrthoMatrix(halfPlaneLength, Mth.equal(nearPlane, -1.0f) ? -DHCompat.getRenderDistance() * 16 : nearPlane, Mth.equal(farPlane, -1.0f) ? DHCompat.getRenderDistance() * 16 : farPlane);
+			shadowProjection = ShadowMatrices.createOrthoMatrix(halfPlaneLength, Mth.equal(nearPlane, -1.0f) ? -Minecraft.getInstance().options.getEffectiveRenderDistance() * 16 : nearPlane, Mth.equal(farPlane, -1.0f) ? Minecraft.getInstance().options.getEffectiveRenderDistance() * 16 : farPlane);
 		}
 		levelRenderState.cameraRenderState.projectionMatrix = shadowProjection;
 
@@ -803,7 +804,7 @@ public class ShadowRenderer {
 
 	}
 
-	private record MipmapPass(int texture, int targetFilteringMode) {
+	private record MipmapPass(GpuTexture texture, int glTextureId, FilterMode filterMode, int targetFilteringMode) {
 
 
 	}

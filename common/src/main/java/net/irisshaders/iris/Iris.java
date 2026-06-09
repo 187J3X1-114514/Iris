@@ -7,7 +7,6 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import net.caffeinemc.mods.sodium.api.vertex.serializer.VertexSerializerRegistry;
-import net.irisshaders.iris.compat.dh.DHCompat;
 import net.irisshaders.iris.config.IrisConfig;
 import net.irisshaders.iris.gl.GLDebug;
 import net.irisshaders.iris.gl.IrisRenderSystem;
@@ -739,10 +738,6 @@ public class Iris {
 		return shaderpacksDirectoryManager;
 	}
 
-	public static boolean loadedIncompatiblePack() {
-		return DHCompat.lastPackIncompatible();
-	}
-
 	public static boolean isPackInUseQuick() {
 		return getPipelineManager().getPipelineNullable() instanceof IrisRenderingPipeline;
 	}
@@ -793,7 +788,6 @@ public class Iris {
 		shaderpackScreenKeybind = IrisPlatformHelpers.getInstance().registerKeyBinding(new KeyMapping("iris.keybind.shaderPackSelection", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_I, irisKeybindCategory));
 		wireframeKeybind = IrisPlatformHelpers.getInstance().registerKeyBinding(new KeyMapping("iris.keybind.wireframe", InputConstants.Type.KEYSYM, InputConstants.UNKNOWN.getValue(), irisKeybindCategory));
 
-		DHCompat.run();
 
 		try {
 			if (!Files.exists(getShaderpacksDirectory())) {

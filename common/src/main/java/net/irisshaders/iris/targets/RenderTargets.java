@@ -213,6 +213,10 @@ public class RenderTargets {
 				}
 			}
 
+			for (GlFramebuffer framebuffer : ownedFramebuffers) {
+				framebuffer.refreshColorAttachments();
+			}
+
 			fullClearRequired = true;
 		}
 
@@ -289,7 +293,7 @@ public class RenderTargets {
 
 		// NB: Before OpenGL 3.0, all framebuffers are required to have a color
 		// attachment no matter what.
-		framebuffer.addColorAttachment(0, getOrCreate(0).getMainTexture());
+		framebuffer.addColorAttachment(0, getOrCreate(0).getMainTextureView());
 		framebuffer.noDrawBuffers();
 
 		return framebuffer;
@@ -364,10 +368,9 @@ public class RenderTargets {
 			}
 
 			RenderTarget target = this.getOrCreate(drawBuffers[i]);
+			int attachmentIndex = i;
 
-			int textureId = stageWritesToMain.contains(drawBuffers[i]) ? target.getMainTexture() : target.getAltTexture();
-
-			framebuffer.addColorAttachment(i, textureId);
+			framebuffer.addColorAttachment(i, () -> stageWritesToMain.contains(drawBuffers[attachmentIndex]) ? target.getMainTextureView() : target.getAltTextureView());
 		}
 
 		framebuffer.drawBuffers(actualDrawBuffers);

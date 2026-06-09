@@ -2,7 +2,6 @@ package net.irisshaders.iris.pipeline;
 
 import com.mojang.blaze3d.textures.GpuTextureView;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
-import net.irisshaders.iris.compat.dh.DHCompat;
 import net.irisshaders.iris.features.FeatureFlags;
 import net.irisshaders.iris.gl.texture.TextureType;
 import net.irisshaders.iris.helpers.Tri;
@@ -87,8 +86,6 @@ public interface WorldRenderingPipeline {
 	boolean hasFeature(FeatureFlags flags);
 
 	float getSunPathRotation();
-
-	DHCompat getDHCompat();
 
 	void setIsMainBound(boolean mainBound);
 
