@@ -70,7 +70,7 @@ public class IrisMixinPlugin implements IMixinConfigPlugin {
 	@Override
 	public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         if (mixinClassName.contains("VKOnly")) return usingVulkan;
-		return !usingVulkan;
+		return true;
 	}
 
 	@Override

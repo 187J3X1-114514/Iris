@@ -1,24 +1,15 @@
 package net.irisshaders.iris.mixin;
 
 import com.mojang.blaze3d.opengl.GlBackend;
-import com.mojang.blaze3d.platform.DisplayData;
-import com.mojang.blaze3d.platform.ScreenManager;
-import com.mojang.blaze3d.platform.Window;
-import com.mojang.blaze3d.platform.WindowEventHandler;
-import com.mojang.blaze3d.shaders.GpuDebugOptions;
-import com.mojang.blaze3d.shaders.ShaderSource;
-import com.mojang.blaze3d.systems.GpuBackend;
 import net.caffeinemc.mods.sodium.client.SodiumClientMod;
 import net.caffeinemc.mods.sodium.client.gui.SodiumOptions;
 import net.irisshaders.iris.Iris;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.util.tinyfd.TinyFileDialogs;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.io.IOException;
 
