@@ -7,7 +7,6 @@ import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.opengl.GlStateManager;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import it.unimi.dsi.fastutil.ints.IntList;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
@@ -47,7 +46,6 @@ import net.irisshaders.iris.shaderpack.properties.ProgramDirectives;
 import net.irisshaders.iris.shaderpack.texture.TextureStage;
 import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import net.irisshaders.iris.targets.Blaze3dRenderTargetExt;
-import net.irisshaders.iris.targets.GpuMipmapGenerator;
 import net.irisshaders.iris.targets.RenderTarget;
 import net.irisshaders.iris.targets.RenderTargets;
 import net.irisshaders.iris.uniforms.CommonUniforms;
@@ -95,11 +93,11 @@ public class FinalPassRenderer {
 
 	// TODO: The length of this argument list is getting a bit ridiculous
 	public FinalPassRenderer(WorldRenderingPipeline pipeline, ProgramSet pack, RenderTargets renderTargets, TextureAccess noiseTexture, ShaderStorageBufferHolder holder,
-							 FrameUpdateNotifier updateNotifier, ImmutableSet<Integer> flippedBuffers,
-							 CenterDepthSampler centerDepthSampler,
-							 Supplier<ShadowRenderTargets> shadowTargetsSupplier,
-							 Object2ObjectMap<String, TextureAccess> customTextureIds,
-							 Object2ObjectMap<String, TextureAccess> irisCustomTextures, Set<GlImage> customImages, ImmutableSet<Integer> flippedAtLeastOnce
+	                         FrameUpdateNotifier updateNotifier, ImmutableSet<Integer> flippedBuffers,
+	                         CenterDepthSampler centerDepthSampler,
+	                         Supplier<ShadowRenderTargets> shadowTargetsSupplier,
+	                         Object2ObjectMap<String, TextureAccess> customTextureIds,
+	                         Object2ObjectMap<String, TextureAccess> irisCustomTextures, Set<GlImage> customImages, ImmutableSet<Integer> flippedAtLeastOnce
 		, CustomUniforms customUniforms) {
 		this.pipeline = pipeline;
 		this.centerDepthSampler = centerDepthSampler;
@@ -171,6 +169,8 @@ public class FinalPassRenderer {
 	private static void setupMipmapping(RenderTarget target, boolean readFromAlt) {
 		if (target == null) return;
 
+		int texture = readFromAlt ? target.getAltTexture() : target.getMainTexture();
+
 		// TODO: Only generate the mipmap if a valid mipmap hasn't been generated or if we've written to the buffer
 		// (since the last mipmap was generated)
 		//
@@ -182,8 +182,7 @@ public class FinalPassRenderer {
 		//
 		// Also note that this only applies to one of the two buffers in a render target buffer pair - making it
 		// unlikely that this issue occurs in practice with most shader packs.
-		GpuMipmapGenerator.generate(readFromAlt ? target.getAltGpuTexture() : target.getMainGpuTexture(),
-			target.getInternalFormat().getPixelFormat().isInteger() ? FilterMode.NEAREST : FilterMode.LINEAR);
+		IrisRenderSystem.generateMipmaps(texture, GL20C.GL_TEXTURE_2D);
 
 		target.turnOnMips(readFromAlt);
 	}
@@ -322,8 +321,6 @@ public class FinalPassRenderer {
 	}
 
 	public void recalculateSwapPassSize() {
-		this.baseline.refreshColorAttachments();
-
 		for (SwapPass swapPass : swapPasses) {
 			RenderTarget target = renderTargets.get(swapPass.target);
 			renderTargets.destroyFramebuffer(swapPass.from);
@@ -336,7 +333,7 @@ public class FinalPassRenderer {
 
 	// TODO: Don't just copy this from DeferredWorldRenderingPipeline
 	private Program createProgram(ProgramSource source, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot,
-								  Supplier<ShadowRenderTargets> shadowTargetsSupplier) {
+	                              Supplier<ShadowRenderTargets> shadowTargetsSupplier) {
 		// TODO: Properly handle empty shaders
 		Map<PatchShaderType, String> transformed = TransformPatcher.patchComposite(
 			source.getName(),

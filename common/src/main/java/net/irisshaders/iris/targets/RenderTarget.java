@@ -1,27 +1,26 @@
 package net.irisshaders.iris.targets;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.opengl.GlTexture;
-import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.textures.GpuTextureView;
+import com.mojang.blaze3d.opengl.GlStateManager;
 import net.irisshaders.iris.gl.GLDebug;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.gl.sampler.GlSampler;
 import net.irisshaders.iris.gl.texture.InternalTextureFormat;
 import net.irisshaders.iris.gl.texture.PixelFormat;
 import net.irisshaders.iris.gl.texture.PixelType;
-import net.irisshaders.iris.mixinterface.GpuTextureInterface;
 import org.joml.Vector2i;
 import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL13C;
 import org.lwjgl.opengl.GL43C;
 
+import java.nio.ByteBuffer;
+
 public class RenderTarget {
+	private static final ByteBuffer NULL_BUFFER = null;
 	private final InternalTextureFormat internalFormat;
-	private GpuTexture mainTexture;
-	private GpuTexture altTexture;
-	private GpuTextureView mainTextureView;
-	private GpuTextureView altTextureView;
+	private final PixelFormat format;
+	private final PixelType type;
+	private final int mainTexture;
+	private final int altTexture;
 	private int width;
 	private int height;
 	private boolean isValid;
@@ -35,56 +34,45 @@ public class RenderTarget {
 
 		this.name = builder.name;
 		this.internalFormat = builder.internalFormat;
+		this.format = builder.format;
+		this.type = builder.type;
 
 		this.width = builder.width;
 		this.height = builder.height;
 
 
+		this.mainTexture = GlStateManager._genTexture();
+		this.altTexture = GlStateManager._genTexture();
+
 		boolean isPixelFormatInteger = builder.internalFormat.getPixelFormat().isInteger();
 		this.allowsLinear = !isPixelFormatInteger;
-		this.mainTexture = createTexture(builder.width, builder.height, false);
-		this.altTexture = createTexture(builder.width, builder.height, true);
-		this.mainTextureView = RenderSystem.getDevice().createTextureView(this.mainTexture);
-		this.altTextureView = RenderSystem.getDevice().createTextureView(this.altTexture);
-		if (this.mainTexture instanceof GlTexture) {
-			setupTexture(getMainTexture(), !isPixelFormatInteger);
-			setupTexture(getAltTexture(), !isPixelFormatInteger);
-		}
+		setupTexture(mainTexture, builder.width, builder.height, !isPixelFormatInteger, false);
+		setupTexture(altTexture, builder.width, builder.height, !isPixelFormatInteger, true);
 
 		// Clean up after ourselves
 		// This is strictly defensive to ensure that other buggy code doesn't tamper with our textures
-		IrisRenderSystem.bindTextureToUnit(GL11C.GL_TEXTURE_2D, 0, 0);
+		GlStateManager._bindTexture(0);
 	}
 
 	public static Builder builder() {
 		return new Builder();
 	}
 
-	private GpuTexture createTexture(int width, int height, boolean alt) {
-		GpuTexture texture = RenderSystem.getDevice().createTexture(name == null ? null : name + " " + (alt ? "alt" : "main"),
-			GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_RENDER_ATTACHMENT,
-			this.internalFormat.toGpuFormat(), width, height, 1, maxSafeMipLevels(width, height));
+	private void setupTexture(int texture, int width, int height, boolean allowsLinear, boolean alt) {
+		resizeTexture(texture, width, height, alt);
 
-		if (name != null && texture instanceof GlTexture) {
-			GLDebug.nameObject(GL43C.GL_TEXTURE, ((GpuTextureInterface) texture).iris$getGlId(), name + " " + (alt ? "alt" : "main"));
-		}
-
-		return texture;
-	}
-
-	private static int maxSafeMipLevels(int width, int height) {
-		int levels = 1;
-		while ((width >> levels) > 0 && (height >> levels) > 0) {
-			levels++;
-		}
-		return levels;
-	}
-
-	private void setupTexture(int texture, boolean allowsLinear) {
 		IrisRenderSystem.texParameteri(texture, GL11C.GL_TEXTURE_2D, GL11C.GL_TEXTURE_MIN_FILTER, allowsLinear ? GL11C.GL_LINEAR : GL11C.GL_NEAREST);
 		IrisRenderSystem.texParameteri(texture, GL11C.GL_TEXTURE_2D, GL11C.GL_TEXTURE_MAG_FILTER, allowsLinear ? GL11C.GL_LINEAR : GL11C.GL_NEAREST);
 		IrisRenderSystem.texParameteri(texture, GL11C.GL_TEXTURE_2D, GL11C.GL_TEXTURE_WRAP_S, GL13C.GL_CLAMP_TO_EDGE);
 		IrisRenderSystem.texParameteri(texture, GL11C.GL_TEXTURE_2D, GL11C.GL_TEXTURE_WRAP_T, GL13C.GL_CLAMP_TO_EDGE);
+	}
+
+	private void resizeTexture(int texture, int width, int height, boolean alt) {
+		IrisRenderSystem.texImage2D(texture, GL11C.GL_TEXTURE_2D, 0, internalFormat.getGlFormat(), width, height, 0, format.getGlFormat(), type.getGlFormat(), NULL_BUFFER);
+
+		if (name != null) {
+			GLDebug.nameObject(GL43C.GL_TEXTURE, texture, name + " " + (alt ? "alt" : "main"));
+		}
 	}
 
 	void resize(Vector2i textureScaleOverride) {
@@ -98,19 +86,9 @@ public class RenderTarget {
 		this.width = width;
 		this.height = height;
 
-		this.mainTextureView.close();
-		this.altTextureView.close();
-		this.mainTexture.close();
-		this.altTexture.close();
+		resizeTexture(mainTexture, width, height, false);
 
-		this.mainTexture = createTexture(width, height, false);
-		this.altTexture = createTexture(width, height, true);
-		this.mainTextureView = RenderSystem.getDevice().createTextureView(this.mainTexture);
-		this.altTextureView = RenderSystem.getDevice().createTextureView(this.altTexture);
-		if (this.mainTexture instanceof GlTexture) {
-			setupTexture(getMainTexture(), this.allowsLinear);
-			setupTexture(getAltTexture(), this.allowsLinear);
-		}
+		resizeTexture(altTexture, width, height, true);
 	}
 
 	public InternalTextureFormat getInternalFormat() {
@@ -120,37 +98,13 @@ public class RenderTarget {
 	public int getMainTexture() {
 		requireValid();
 
-		return ((GpuTextureInterface) mainTexture).iris$getGlId();
+		return mainTexture;
 	}
 
 	public int getAltTexture() {
 		requireValid();
 
-		return ((GpuTextureInterface) altTexture).iris$getGlId();
-	}
-
-	public GpuTexture getMainGpuTexture() {
-		requireValid();
-
-		return mainTexture;
-	}
-
-	public GpuTexture getAltGpuTexture() {
-		requireValid();
-
 		return altTexture;
-	}
-
-	public GpuTextureView getMainTextureView() {
-		requireValid();
-
-		return mainTextureView;
-	}
-
-	public GpuTextureView getAltTextureView() {
-		requireValid();
-
-		return altTextureView;
 	}
 
 	public int getWidth() {
@@ -165,10 +119,8 @@ public class RenderTarget {
 		requireValid();
 		isValid = false;
 
-		mainTextureView.close();
-		altTextureView.close();
-		mainTexture.close();
-		altTexture.close();
+		GlStateManager._deleteTexture(mainTexture);
+		GlStateManager._deleteTexture(altTexture);
 	}
 
 	private void requireValid() {

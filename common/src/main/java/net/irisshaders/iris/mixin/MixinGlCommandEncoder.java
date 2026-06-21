@@ -3,25 +3,21 @@ package net.irisshaders.iris.mixin;
 import com.llamalad7.mixinextras.sugar.Local;
 import com.mojang.blaze3d.opengl.GlCommandEncoder;
 import com.mojang.blaze3d.opengl.GlConst;
-import com.mojang.blaze3d.opengl.GlDevice;
 import com.mojang.blaze3d.opengl.GlProgram;
 import com.mojang.blaze3d.opengl.GlRenderPass;
 import com.mojang.blaze3d.opengl.GlStateManager;
 import com.mojang.blaze3d.opengl.GlTexture;
 import com.mojang.blaze3d.opengl.Uniform;
-import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.pipeline.BlendFunction;
 import com.mojang.blaze3d.pipeline.DepthStencilState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.systems.ScissorState;
 import com.mojang.blaze3d.textures.FilterMode;
-import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import it.unimi.dsi.fastutil.ints.IntList;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.gl.blending.DepthColorStorage;
-import net.irisshaders.iris.mixinterface.IrisCommandEncoderBackend;
 import net.irisshaders.iris.pipeline.IrisRenderingPipeline;
 import net.irisshaders.iris.pipeline.programs.ExtendedShader;
 import net.irisshaders.iris.pipeline.programs.IrisProgram;
@@ -45,16 +41,7 @@ import java.util.Collection;
 import java.util.List;
 
 @Mixin(GlCommandEncoder.class)
-public class MixinGlCommandEncoder implements IrisCommandEncoderBackend {
-	@Shadow
-	private GlDevice device;
-
-	@Shadow
-	private int readFbo;
-
-	@Shadow
-	private int drawFbo;
-
+public class MixinGlCommandEncoder {
 	@Shadow
 	@Nullable
 	private RenderPipeline lastPipeline;
@@ -69,73 +56,6 @@ public class MixinGlCommandEncoder implements IrisCommandEncoderBackend {
 	@Unique
 	private List<IrisProgram> programsToClear = new ArrayList<>();
 
-	@Override
-	public void iris$blitTextureMip(GpuTexture texture, int srcLevel, int dstLevel, FilterMode requestedFilter) {
-		GlStateManager.clearGlErrors();
-		GlStateManager._disableScissorTest();
-
-		GlTexture glTexture = (GlTexture) texture;
-		boolean isDepth = texture.getFormat().hasDepthAspect();
-		int mask = isDepth ? GL33C.GL_DEPTH_BUFFER_BIT : GL33C.GL_COLOR_BUFFER_BIT;
-		int filter = iris$mipmapFilter(texture.getFormat(), isDepth, requestedFilter);
-
-		this.device.directStateAccess().bindFrameBufferTextures(
-			this.readFbo,
-			isDepth ? 0 : glTexture.glId(),
-			isDepth ? glTexture.glId() : 0,
-			srcLevel,
-			0
-		);
-		this.device.directStateAccess().bindFrameBufferTextures(
-			this.drawFbo,
-			isDepth ? 0 : glTexture.glId(),
-			isDepth ? glTexture.glId() : 0,
-			dstLevel,
-			0
-		);
-		this.device.directStateAccess().blitFrameBuffers(
-			this.readFbo,
-			this.drawFbo,
-			0,
-			0,
-			texture.getWidth(srcLevel),
-			texture.getHeight(srcLevel),
-			0,
-			0,
-			texture.getWidth(dstLevel),
-			texture.getHeight(dstLevel),
-			mask,
-			filter
-		);
-
-		int error = GlStateManager._getError();
-		if (error != 0) {
-			throw new IllegalStateException("Couldn't generate mip " + dstLevel + " for texture " + texture.getLabel() + ": GL error " + error);
-		}
-	}
-
-	@Override
-	public boolean iris$supportsBlitMipmaps(GpuFormat format, boolean depth) {
-		return format.hasColorAspect() || format.hasDepthAspect();
-	}
-
-	@Unique
-	private static int iris$mipmapFilter(GpuFormat format, boolean depth, FilterMode requestedFilter) {
-		if (depth || iris$isInteger(format)) {
-			return GL33C.GL_NEAREST;
-		}
-
-		return requestedFilter == FilterMode.LINEAR ? GL33C.GL_LINEAR : GL33C.GL_NEAREST;
-	}
-
-	@Unique
-	private static boolean iris$isInteger(GpuFormat format) {
-		return switch (format.componentType()) {
-			case UINT_8, SINT_8, UINT_16, SINT_16, UINT_32, SINT_32 -> true;
-			default -> false;
-		};
-	}
-
 	// Do not change the viewport in the shadow pass.
 	@Redirect(method = "createRenderPass", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/opengl/GlStateManager;_viewport(IIII)V"))
 	private void changeViewport(int i, int j, int k, int l) {
@@ -149,8 +69,8 @@ public class MixinGlCommandEncoder implements IrisCommandEncoderBackend {
 	@Redirect(method = "createRenderPass", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/opengl/GlStateManager;_scissorBox(IIII)V"))
 	private void changeViewport2(int i, int j, int k, int l) {
 		if (ShadowRenderingState.areShadowsCurrentlyBeingRendered()) {
-            GlStateManager._scissorBox(0, 0, ShadowRenderer.RESOLUTION, ShadowRenderer.RESOLUTION);
-            return;
+			GlStateManager._scissorBox(0, 0, ShadowRenderer.RESOLUTION, ShadowRenderer.RESOLUTION);
+			return;
 		} else {
 			GlStateManager._scissorBox(i, j, k, l);
 		}
@@ -160,10 +80,10 @@ public class MixinGlCommandEncoder implements IrisCommandEncoderBackend {
 	@Redirect(method = "createRenderPass", at = @At(value = "INVOKE", target = "Lcom/mojang/blaze3d/systems/ScissorState;enable(IIII)V"))
 	private void changeViewport3(ScissorState instance, int x, int y, int width, int height) {
 		if (ShadowRenderingState.areShadowsCurrentlyBeingRendered()) {
-            instance.enable(0, 0, ShadowRenderer.RESOLUTION, ShadowRenderer.RESOLUTION);
-            return;
+			instance.enable(0, 0, ShadowRenderer.RESOLUTION, ShadowRenderer.RESOLUTION);
+			return;
 		} else {
-            instance.enable(x, y, width, height);
+			instance.enable(x, y, width, height);
 		}
 	}
 
@@ -257,8 +177,8 @@ public class MixinGlCommandEncoder implements IrisCommandEncoderBackend {
 		if (glRenderPass.pipeline.program() instanceof IrisProgram is) {
 			return;
 		} else {
-            GL33C.glDrawBuffers(buffers);
-        }
+			GL33C.glDrawBuffers(buffers);
+		}
 	}
 
 	@Inject(method = "trySetup", at = @At("RETURN"))
@@ -266,9 +186,9 @@ public class MixinGlCommandEncoder implements IrisCommandEncoderBackend {
 		if (glRenderPass.pipeline.program() instanceof IrisProgram is && !is.iris$isSetUp()) {
 			GlRenderPass.TextureViewAndSampler sam = glRenderPass.samplers.get("Sampler0");
 
-            if (sam == null) {
-                sam = glRenderPass.samplers.get("u_BlockTex");
-            }
+			if (sam == null) {
+				sam = glRenderPass.samplers.get("u_BlockTex");
+			}
 			if (sam != null && Iris.getPipelineManager().getPipelineNullable() instanceof IrisRenderingPipeline irp) {
 				irp.onSetAlbedoTex(sam.view());
 			}

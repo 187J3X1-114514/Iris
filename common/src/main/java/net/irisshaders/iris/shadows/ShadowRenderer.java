@@ -6,7 +6,6 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.AddressMode;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
-import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.vertex.PoseStack;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import net.caffeinemc.mods.sodium.client.render.SodiumWorldRenderer;
@@ -39,7 +38,6 @@ import net.irisshaders.iris.uniforms.CameraUniforms;
 import net.irisshaders.iris.uniforms.CapturedRenderingState;
 import net.irisshaders.iris.uniforms.CelestialUniforms;
 import net.irisshaders.iris.uniforms.custom.CustomUniforms;
-import net.irisshaders.iris.targets.GpuMipmapGenerator;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -124,7 +122,7 @@ public class ShadowRenderer {
 	private final FeatureRenderDispatcher featureRenderDispatcher;
 
 	public ShadowRenderer(IrisRenderingPipeline pipeline, ProgramSource shadow, PackDirectives directives,
-						  ShadowRenderTargets shadowRenderTargets, ShadowCompositeRenderer compositeRenderer, CustomUniforms customUniforms, boolean separateHardwareSamplers) {
+	                      ShadowRenderTargets shadowRenderTargets, ShadowCompositeRenderer compositeRenderer, CustomUniforms customUniforms, boolean separateHardwareSamplers) {
 
 		this.pipeline = pipeline;
 		this.separateHardwareSamplers = separateHardwareSamplers;
@@ -232,20 +230,22 @@ public class ShadowRenderer {
 
 		GlStateManager._activeTexture(GL20C.GL_TEXTURE4);
 
-		configureDepthSampler(targets.getDepthTexture(), targets.getDepthTexture().iris$getGlId(), depthSamplingSettings.get(0));
+		configureDepthSampler(targets.getDepthTexture().iris$getGlId(), depthSamplingSettings.get(0));
 
-		configureDepthSampler(targets.getDepthTextureNoTranslucents(), targets.getDepthTextureNoTranslucents().iris$getGlId(), depthSamplingSettings.get(1));
+		configureDepthSampler(targets.getDepthTextureNoTranslucents().iris$getGlId(), depthSamplingSettings.get(1));
 
 		for (int i = 0; i < targets.getNumColorTextures(); i++) {
 			if (targets.get(i) != null) {
-				configureSampler(targets.get(i).getMainGpuTexture(), targets.get(i).getMainTexture(), colorSamplingSettings.computeIfAbsent(i, a -> new PackShadowDirectives.SamplingSettings()));
+				int glTextureId = targets.get(i).getMainTexture();
+
+				configureSampler(glTextureId, colorSamplingSettings.computeIfAbsent(i, a -> new PackShadowDirectives.SamplingSettings()));
 			}
 		}
 
 		GlStateManager._activeTexture(GL20C.GL_TEXTURE0);
 	}
 
-	private void configureDepthSampler(GpuTexture texture, int glTextureId, PackShadowDirectives.DepthSamplingSettings settings) {
+	private void configureDepthSampler(int glTextureId, PackShadowDirectives.DepthSamplingSettings settings) {
 		if (settings.getHardwareFiltering() && !separateHardwareSamplers) {
 			// We have to do this or else shadow hardware filtering breaks entirely!
 			IrisRenderSystem.texParameteri(glTextureId, GL20C.GL_TEXTURE_2D, GL20C.GL_TEXTURE_COMPARE_MODE, GL30C.GL_COMPARE_REF_TO_TEXTURE);
@@ -257,13 +257,13 @@ public class ShadowRenderer {
 		IrisRenderSystem.texParameteriv(glTextureId, GL20C.GL_TEXTURE_2D, ARBTextureSwizzle.GL_TEXTURE_SWIZZLE_RGBA,
 			new int[]{GL30C.GL_RED, GL30C.GL_RED, GL30C.GL_RED, GL30C.GL_ONE});
 
-		configureSampler(texture, glTextureId, settings);
+		configureSampler(glTextureId, settings);
 	}
 
-	private void configureSampler(GpuTexture texture, int glTextureId, PackShadowDirectives.SamplingSettings settings) {
+	private void configureSampler(int glTextureId, PackShadowDirectives.SamplingSettings settings) {
 		if (settings.getMipmap()) {
 			int filteringMode = settings.getNearest() ? GL20C.GL_NEAREST_MIPMAP_NEAREST : GL20C.GL_LINEAR_MIPMAP_LINEAR;
-			mipmapPasses.add(new MipmapPass(texture, glTextureId, settings.getNearest() ? FilterMode.NEAREST : FilterMode.LINEAR, filteringMode));
+			mipmapPasses.add(new MipmapPass(glTextureId, filteringMode));
 		}
 
 		if (!settings.getNearest()) {
@@ -280,17 +280,15 @@ public class ShadowRenderer {
 		GlStateManager._activeTexture(GL20C.GL_TEXTURE4);
 
 		for (MipmapPass mipmapPass : mipmapPasses) {
-			setupMipmappingForTexture(mipmapPass);
+			setupMipmappingForTexture(mipmapPass.texture(), mipmapPass.targetFilteringMode());
 		}
 
 		GlStateManager._activeTexture(GL20C.GL_TEXTURE0);
 	}
 
-	private void setupMipmappingForTexture(MipmapPass mipmapPass) {
-		if (mipmapPass.texture() != null) {
-			GpuMipmapGenerator.generate(mipmapPass.texture(), mipmapPass.filterMode());
-		}
-		IrisRenderSystem.texParameteri(mipmapPass.glTextureId(), GL20C.GL_TEXTURE_2D, GL20C.GL_TEXTURE_MIN_FILTER, mipmapPass.targetFilteringMode());
+	private void setupMipmappingForTexture(int texture, int filteringMode) {
+		IrisRenderSystem.generateMipmaps(texture, GL20C.GL_TEXTURE_2D);
+		IrisRenderSystem.texParameteri(texture, GL20C.GL_TEXTURE_2D, GL20C.GL_TEXTURE_MIN_FILTER, filteringMode);
 	}
 
 	private FrustumHolder createShadowFrustum(float renderMultiplier, FrustumHolder holder) {
@@ -362,7 +360,7 @@ public class ShadowRenderer {
 			shadowLightVectorFromOrigin.normalize();
 
 			Matrix4f projView = (CapturedRenderingState.INSTANCE.getGbufferProjection())
-					.mul(CapturedRenderingState.INSTANCE.getGbufferModelView(), new Matrix4f());
+				.mul(CapturedRenderingState.INSTANCE.getGbufferModelView(), new Matrix4f());
 
 			if (hasSafeZone) {
 				return holder.setInfo(new SafeZoneCullingFrustum(projView, PROJECTION, shadowLightVectorFromOrigin, boxCuller, new BoxCuller(halfPlaneLength * renderMultiplier)), distanceInfo, cullingInfo);
@@ -482,17 +480,17 @@ public class ShadowRenderer {
 			sodiumWorldRenderer.scheduleTerrainUpdate();
 
 			// Sodium replaces LevelExtractor's frustum path with SodiumWorldRenderer.setupTerrain().
-            Frustum shadowFrustum = terrainFrustumHolder.getFrustum();
-            sodiumWorldRenderer.setupTerrain(
-                playerCamera,
-                ((ViewportProvider) shadowFrustum).sodium$createViewport(),
-                ((FogStorage) client.gameRenderer).sodium$getFogParameters(),
-                playerCamera.entity() != null && playerCamera.entity().isSpectator(),
-                false,
-                ((FrustumAccessor) shadowFrustum).sodium$getMatrix()
-            );
+			Frustum shadowFrustum = terrainFrustumHolder.getFrustum();
+			sodiumWorldRenderer.setupTerrain(
+				playerCamera,
+				((ViewportProvider) shadowFrustum).sodium$createViewport(),
+				((FogStorage) client.gameRenderer).sodium$getFogParameters(),
+				playerCamera.entity() != null && playerCamera.entity().isSpectator(),
+				false,
+				((FrustumAccessor) shadowFrustum).sodium$getMatrix()
+			);
 
-            // Don't forget to increment the frame counter! This variable is arbitrary and only used in terrain setup,
+			// Don't forget to increment the frame counter! This variable is arbitrary and only used in terrain setup,
 			// and if it's not incremented, the vanilla culling code will get confused and think that it's already seen
 			// chunks during traversal, and break rendering in concerning ways.
 			//worldRenderer.setFrameId(worldRenderer.getFrameId() + 1);
@@ -804,7 +802,7 @@ public class ShadowRenderer {
 
 	}
 
-	private record MipmapPass(GpuTexture texture, int glTextureId, FilterMode filterMode, int targetFilteringMode) {
+	private record MipmapPass(int texture, int targetFilteringMode) {
 
 
 	}

@@ -88,7 +88,7 @@ public class IrisRenderSystem {
 
 	public static void generateMipmaps(int texture, int mipmapTarget) {
 		RenderSystem.assertOnRenderThread();
-		throw new UnsupportedOperationException("Raw GL mipmap generation is disabled; use GpuMipmapGenerator continuous blit instead.");
+		dsaState.generateMipmaps(texture, mipmapTarget);
 	}
 
 	public static void bindAttributeLocation(int program, int index, CharSequence name) {
@@ -509,10 +509,10 @@ public class IrisRenderSystem {
 
 	public static void copyImageSubData(int sourceTexture, int target, int mip, int srcX, int srcY, int srcZ, int destTexture, int dstTarget, int dstMip, int dstX, int dstY, int dstZ, int width, int height, int depth) {
 		GL46C.glCopyImageSubData(sourceTexture, target, mip, srcX, srcY, srcZ, destTexture, dstTarget, dstMip, dstX, dstY, dstZ, width, height, depth);
-  }
+	}
 
 
-  private static boolean cullingState;
+	private static boolean cullingState;
 
 	public static void backupAndDisableCullingState(boolean b) {
 		cullingState = Minecraft.getInstance().smartCull;
@@ -522,7 +522,7 @@ public class IrisRenderSystem {
 	public static void restoreCullingState() {
 		Minecraft.getInstance().smartCull = cullingState;
 		cullingState = true;
-  }
+	}
 
 	public static void onProgramUse() {
 		for (int i = 0; i < textureToUnswizzle.size(); i++) {
@@ -563,7 +563,9 @@ public class IrisRenderSystem {
 		return (GlDevice) ((GpuDeviceAccessor) RenderSystem.getDevice()).getBackend();
 	}
 
-    public interface DSAAccess {
+	public interface DSAAccess {
+		void generateMipmaps(int texture, int target);
+
 		void texParameteri(int texture, int target, int pname, int param);
 
 		void texParameterf(int texture, int target, int pname, float param);
@@ -604,6 +606,11 @@ public class IrisRenderSystem {
 	}
 
 	public static class DSAARB extends DSAUnsupported {
+
+		@Override
+		public void generateMipmaps(int texture, int target) {
+			ARBDirectStateAccess.glGenerateTextureMipmap(texture);
+		}
 
 		@Override
 		public void texParameteri(int texture, int target, int pname, int param) {
@@ -706,6 +713,14 @@ public class IrisRenderSystem {
 	}
 
 	public static class DSAUnsupported implements DSAAccess {
+		@Override
+		public void generateMipmaps(int texture, int target) {
+			int previous = GlStateManagerAccessor.getTEXTURES()[GlStateManagerAccessor.getActiveTexture()].binding;
+			GlStateManager._bindTexture(texture);
+			GL32C.glGenerateMipmap(target);
+			GlStateManager._bindTexture(previous);
+		}
+
 		@Override
 		public void texParameteri(int texture, int target, int pname, int param) {
 			bindTextureForSetup(target, texture);

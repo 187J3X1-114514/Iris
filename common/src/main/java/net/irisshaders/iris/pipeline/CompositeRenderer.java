@@ -13,7 +13,6 @@ import com.mojang.blaze3d.pipeline.DepthStencilState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.platform.CompareOp;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
@@ -54,7 +53,6 @@ import net.irisshaders.iris.shaderpack.properties.ProgramDirectives;
 import net.irisshaders.iris.shaderpack.texture.TextureStage;
 import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import net.irisshaders.iris.targets.BufferFlipper;
-import net.irisshaders.iris.targets.GpuMipmapGenerator;
 import net.irisshaders.iris.targets.RenderTarget;
 import net.irisshaders.iris.targets.RenderTargets;
 import net.irisshaders.iris.uniforms.CommonUniforms;
@@ -100,11 +98,11 @@ public class CompositeRenderer {
 	private final CompositePass compositePass;
 
 	public CompositeRenderer(WorldRenderingPipeline pipeline, CompositePass compositePass, PackDirectives packDirectives, ProgramSource[] sources, ComputeSource[][] computes, RenderTargets renderTargets, ShaderStorageBufferHolder holder,
-							 TextureAccess noiseTexture, FrameUpdateNotifier updateNotifier,
-							 CenterDepthSampler centerDepthSampler, BufferFlipper bufferFlipper,
-							 Supplier<ShadowRenderTargets> shadowTargetsSupplier, TextureStage textureStage,
-							 Object2ObjectMap<String, TextureAccess> customTextureIds, Object2ObjectMap<String, TextureAccess> irisCustomTextures, Set<GlImage> customImages, ImmutableMap<Integer, Boolean> explicitPreFlips,
-							 CustomUniforms customUniforms) {
+	                         TextureAccess noiseTexture, FrameUpdateNotifier updateNotifier,
+	                         CenterDepthSampler centerDepthSampler, BufferFlipper bufferFlipper,
+	                         Supplier<ShadowRenderTargets> shadowTargetsSupplier, TextureStage textureStage,
+	                         Object2ObjectMap<String, TextureAccess> customTextureIds, Object2ObjectMap<String, TextureAccess> irisCustomTextures, Set<GlImage> customImages, ImmutableMap<Integer, Boolean> explicitPreFlips,
+	                         CustomUniforms customUniforms) {
 		this.pipeline = pipeline;
 		this.compositePass = compositePass;
 		this.noiseTexture = noiseTexture;
@@ -211,6 +209,8 @@ public class CompositeRenderer {
 	private static void setupMipmapping(net.irisshaders.iris.targets.RenderTarget target, boolean readFromAlt) {
 		if (target == null) return;
 
+		int texture = readFromAlt ? target.getAltTexture() : target.getMainTexture();
+
 		// TODO: Only generate the mipmap if a valid mipmap hasn't been generated or if we've written to the buffer
 		// (since the last mipmap was generated)
 		//
@@ -222,8 +222,7 @@ public class CompositeRenderer {
 		//
 		// Also note that this only applies to one of the two buffers in a render target buffer pair - making it
 		// unlikely that this issue occurs in practice with most shader packs.
-		GpuMipmapGenerator.generate(readFromAlt ? target.getAltGpuTexture() : target.getMainGpuTexture(),
-			target.getInternalFormat().getPixelFormat().isInteger() ? FilterMode.NEAREST : FilterMode.LINEAR);
+		IrisRenderSystem.generateMipmaps(texture, GL20C.GL_TEXTURE_2D);
 
 		target.turnOnMips(readFromAlt);
 	}
@@ -361,7 +360,7 @@ public class CompositeRenderer {
 
 	// TODO: Don't just copy this from DeferredWorldRenderingPipeline
 	private Program createProgram(ProgramSource source, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot,
-								  Supplier<ShadowRenderTargets> shadowTargetsSupplier) {
+	                              Supplier<ShadowRenderTargets> shadowTargetsSupplier) {
 		// TODO: Properly handle empty shaders
 		Map<PatchShaderType, String> transformed = TransformPatcher.patchComposite(
 			source.getName(),

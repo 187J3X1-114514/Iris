@@ -62,8 +62,8 @@ public class ShadowRenderTargets {
 			this.linearFiltered[i] = !shadowDirectives.getDepthSamplingSettings().get(i).getNearest();
 		}
 
-		this.mainDepth = RenderSystem.getDevice().createTexture("Shadow Map", GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING, GpuFormat.D32_FLOAT, resolution, resolution, 1, this.mipped[0] ? maxSafeMipLevels(resolution, resolution) : 1);
-		this.noTranslucents = RenderSystem.getDevice().createTexture("Shadow Map / Opaque", GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING, GpuFormat.D32_FLOAT, resolution, resolution, 1, this.mipped[1] ? maxSafeMipLevels(resolution, resolution) : 1);
+		this.mainDepth = RenderSystem.getDevice().createTexture("Shadow Map", GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING, GpuFormat.D32_FLOAT, resolution, resolution, 1, this.mipped[0] ? log2(resolution) : 1);
+		this.noTranslucents = RenderSystem.getDevice().createTexture("Shadow Map / Opaque", GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_RENDER_ATTACHMENT | GpuTexture.USAGE_TEXTURE_BINDING, GpuFormat.D32_FLOAT, resolution, resolution, 1, this.mipped[1] ? log2(resolution) : 1);
 		// TODO: linear filtered shadow maps
 
 		// NB: Make sure all buffers are cleared so that they don't contain undefined
@@ -83,14 +83,6 @@ public class ShadowRenderTargets {
 
 	public static int log2(int val) {
 		return (int) Math.floor(Math.log(val) / LN_OF_2);
-	}
-
-	private static int maxSafeMipLevels(int width, int height) {
-		int levels = 1;
-		while ((width >> levels) > 0 && (height >> levels) > 0) {
-			levels++;
-		}
-		return levels;
 	}
 
 	// TODO: Actually flip. This is required for shadow composites!
@@ -235,7 +227,7 @@ public class ShadowRenderTargets {
 
 		// NB: Before OpenGL 3.0, all framebuffers are required to have a color
 		// attachment no matter what.
-		framebuffer.addColorAttachment(0, get(0).getMainTextureView());
+		framebuffer.addColorAttachment(0, get(0).getMainTexture());
 		framebuffer.noDrawBuffers();
 
 		return framebuffer;
@@ -315,7 +307,9 @@ public class ShadowRenderTargets {
 
 			RenderTarget target = this.getOrCreate(drawBuffers[i]);
 
-			framebuffer.addColorAttachment(i, stageWritesToMain.contains(drawBuffers[i]) ? target.getMainTextureView() : target.getAltTextureView());
+			int textureId = stageWritesToMain.contains(drawBuffers[i]) ? target.getMainTexture() : target.getAltTexture();
+
+			framebuffer.addColorAttachment(i, textureId);
 		}
 
 		framebuffer.drawBuffers(actualDrawBuffers);
