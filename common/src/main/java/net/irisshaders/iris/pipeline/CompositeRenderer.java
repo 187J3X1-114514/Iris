@@ -280,6 +280,7 @@ public class CompositeRenderer {
 		var type = RenderSystem.getSequentialBuffer(PrimitiveTopology.QUADS).type();
 
 		FullScreenQuadRenderer.INSTANCE.bind();
+		GlStateManager._colorMask(15);
 
 		for (int i = 0, passesSize = passes.size(); i < passesSize; i++) {
 			Pass compositePass = passes.get(i);
@@ -320,6 +321,8 @@ public class CompositeRenderer {
 			int beginWidth = (int) (compositePass.viewWidth * compositePass.viewportScale.viewportX());
 			int beginHeight = (int) (compositePass.viewHeight * compositePass.viewportScale.viewportY());
 			GlStateManager._viewport(beginWidth, beginHeight, (int) scaledWidth, (int) scaledHeight);
+			GlStateManager._scissorBox(beginWidth, beginHeight, (int) scaledWidth, (int) scaledHeight);
+			GlStateManager._disableScissorTest();
 
 			compositePass.program.use();
 
