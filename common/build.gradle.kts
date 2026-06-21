@@ -58,7 +58,6 @@ dependencies {
     compileOnly("io.github.douira:glsl-transformer:3.0.0-pre3")
     compileOnly("org.anarres:jcpp:1.4.14")
 
-    compileOnly(files(rootDir.resolve("DHApi.jar")))
 }
 
 afterEvaluate {
