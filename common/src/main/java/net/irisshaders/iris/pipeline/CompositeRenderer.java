@@ -40,9 +40,11 @@ import net.irisshaders.iris.pathways.CenterDepthSampler;
 import net.irisshaders.iris.pathways.FullScreenQuadRenderer;
 import net.irisshaders.iris.pipeline.description.ShaderPackPass;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassLayout;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassStage;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
 import net.irisshaders.iris.pipeline.description.ShaderPackProgramDescriptor;
 import net.irisshaders.iris.pipeline.description.ShaderPackResourceView;
+import net.irisshaders.iris.pipeline.description.ShaderPackRuntimePassSnapshot;
 import net.irisshaders.iris.pipeline.transform.PatchShaderType;
 import net.irisshaders.iris.pipeline.transform.ShaderPrinter;
 import net.irisshaders.iris.pipeline.transform.TransformPatcher;
@@ -127,8 +129,21 @@ public class CompositeRenderer {
 
 			if (passDescription.type() == ShaderPackPassType.COMPUTE) {
 				ComputeOnlyPass pass = new ComputeOnlyPass();
+				pass.id = passDescription.id();
 				pass.name = passDescription.name();
+				pass.stage = passDescription.stage();
+				pass.type = passDescription.type();
 				pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, shadowTargetsSupplier, holder);
+				pass.drawBuffers = layout.drawBuffers().clone();
+				pass.attachmentMapping = Map.copyOf(layout.attachmentMapping());
+				pass.explicitPreFlips = Map.copyOf(layout.explicitPreFlips());
+				pass.explicitFlips = Map.copyOf(layout.explicitFlips());
+				pass.resolvedFlips = ImmutableSet.copyOf(layout.resolvedFlips());
+				pass.stageReadsFromAlt = stageReadsFromAlt;
+				pass.viewportScale = passDescription.behavior().viewportScale();
+				pass.mipmappedBuffers = ImmutableSet.copyOf(passDescription.behavior().mipmappedInputs());
+				pass.flippedAtLeastOnce = flippedAtLeastOnceSnapshot;
+				pass.derivedFramebufferKey = layout.derivedFramebufferKey();
 				passes.add(pass);
 				continue;
 			}
@@ -136,7 +151,10 @@ public class CompositeRenderer {
 			Pass pass = new Pass();
 			ProgramSource source = sourceFor(passDescription, sourcesByName);
 
+			pass.id = passDescription.id();
 			pass.name = passDescription.name();
+			pass.stage = passDescription.stage();
+			pass.type = passDescription.type();
 			pass.program = createProgram(source, stageReadsFromAlt, flippedAtLeastOnceSnapshot, shadowTargetsSupplier);
 			pass.blendModeOverride = passDescription.behavior().blendModeOverride();
 			pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, shadowTargetsSupplier, holder);
@@ -154,6 +172,10 @@ public class CompositeRenderer {
 			}
 
 			pass.drawBuffers = drawBuffers;
+			pass.attachmentMapping = Map.copyOf(layout.attachmentMapping());
+			pass.explicitPreFlips = Map.copyOf(layout.explicitPreFlips());
+			pass.explicitFlips = Map.copyOf(layout.explicitFlips());
+			pass.resolvedFlips = ImmutableSet.copyOf(layout.resolvedFlips());
 			pass.viewWidth = passWidth;
 			pass.viewHeight = passHeight;
 			pass.stageReadsFromAlt = stageReadsFromAlt;
@@ -161,6 +183,7 @@ public class CompositeRenderer {
 			pass.viewportScale = passDescription.behavior().viewportScale();
 			pass.mipmappedBuffers = ImmutableSet.copyOf(passDescription.behavior().mipmappedInputs());
 			pass.flippedAtLeastOnce = flippedAtLeastOnceSnapshot;
+			pass.derivedFramebufferKey = layout.derivedFramebufferKey();
 
 			passes.add(pass);
 		}
@@ -234,6 +257,16 @@ public class CompositeRenderer {
 
 	public ImmutableSet<Integer> getFlippedAtLeastOnceFinal() {
 		return this.flippedAtLeastOnceFinal;
+	}
+
+	public List<ShaderPackRuntimePassSnapshot> snapshotRuntimePasses() {
+		ImmutableList.Builder<ShaderPackRuntimePassSnapshot> snapshots = ImmutableList.builder();
+
+		for (Pass pass : passes) {
+			snapshots.add(pass.snapshot());
+		}
+
+		return snapshots.build();
 	}
 
 	public void recalculateSizes() {
@@ -476,10 +509,17 @@ public class CompositeRenderer {
 	}
 
 	private static class Pass implements CustomPass {
+		String id;
 		int[] drawBuffers;
+		Map<Integer, Integer> attachmentMapping;
+		Map<Integer, Boolean> explicitPreFlips;
+		Map<Integer, Boolean> explicitFlips;
+		ImmutableSet<Integer> resolvedFlips;
 		int viewWidth;
 		int viewHeight;
 		String name;
+		ShaderPackPassStage stage;
+		ShaderPackPassType type;
 		Program program;
 		BlendModeOverride blendModeOverride;
 		ComputeProgram[] computes;
@@ -488,6 +528,7 @@ public class CompositeRenderer {
 		ImmutableSet<Integer> stageReadsFromAlt;
 		ImmutableSet<Integer> mipmappedBuffers;
 		ViewportData viewportScale;
+		String derivedFramebufferKey;
 
 		protected void destroy() {
 			this.program.destroy();
@@ -508,6 +549,28 @@ public class CompositeRenderer {
 				GlStateManager._disableBlend(0);
 			}
 		}
+
+		ShaderPackRuntimePassSnapshot snapshot() {
+			return new ShaderPackRuntimePassSnapshot(
+				id,
+				name,
+				stage,
+				type,
+				drawBuffers,
+				attachmentMapping,
+				explicitPreFlips,
+				explicitFlips,
+				resolvedFlips,
+				stageReadsFromAlt,
+				flippedAtLeastOnce,
+				mipmappedBuffers,
+				viewportScale,
+				blendModeOverride != null,
+				countComputes(computes),
+				program != null,
+				derivedFramebufferKey
+			);
+		}
 	}
 
 	private static class ComputeOnlyPass extends Pass {
@@ -519,5 +582,17 @@ public class CompositeRenderer {
 				}
 			}
 		}
+	}
+
+	private static int countComputes(ComputeProgram[] computes) {
+		int count = 0;
+
+		for (ComputeProgram compute : computes) {
+			if (compute != null) {
+				count++;
+			}
+		}
+
+		return count;
 	}
 }

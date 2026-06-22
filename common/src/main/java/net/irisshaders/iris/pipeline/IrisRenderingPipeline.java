@@ -13,6 +13,7 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMaps;
+import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.features.FeatureFlags;
 import net.irisshaders.iris.gl.GLDebug;
 import net.irisshaders.iris.gl.IrisRenderSystem;
@@ -56,6 +57,9 @@ import net.irisshaders.iris.pipeline.description.ShaderPackPassStage;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipeline;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineBuilder;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineDebugDump;
+import net.irisshaders.iris.pipeline.description.ShaderPackPipelineRuntimeDiff;
+import net.irisshaders.iris.pipeline.description.ShaderPackPipelineRuntimeSnapshot;
+import net.irisshaders.iris.pipeline.description.ShaderPackRuntimePassSnapshot;
 import net.irisshaders.iris.pipeline.programs.ExtendedShader;
 import net.irisshaders.iris.pipeline.programs.ShaderCreator;
 import net.irisshaders.iris.pipeline.programs.ShaderKey;
@@ -115,6 +119,7 @@ import org.lwjgl.opengl.*;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -180,6 +185,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 	private final ImmutableList<ImageClearPass> clearImages;
 	private final ShaderPack pack;
 	private final ShaderPackPipeline shaderPackPipelineDescription;
+	private final ShaderPackPipelineRuntimeDiff shaderPackPipelineRuntimeDiff;
 	private final PackShadowDirectives shadowDirectives;
 	private final int stackSize = 0;
 	private final boolean skipAllRendering;
@@ -535,6 +541,11 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 		defaultFB = flippedAfterPrepare.contains(defaultTex) ? renderTargets.createFramebufferWritingToAlt(new int[] { defaultTex }) : renderTargets.createFramebufferWritingToMain(new int[] { defaultTex });
 		defaultFBAlt = flippedAfterTranslucent.contains(defaultTex) ? renderTargets.createFramebufferWritingToAlt(new int[] { defaultTex }) : renderTargets.createFramebufferWritingToMain(new int[] { defaultTex });
+		this.shaderPackPipelineRuntimeDiff = ShaderPackPipelineRuntimeDiff.compare(shaderPackPipelineDescription, snapshotRuntimePipeline());
+		Iris.logger.info("Shaderpack phase 1/2 runtime diff: {}", shaderPackPipelineRuntimeDiff.summary());
+		if (shaderPackPipelineRuntimeDiff.hasDifferences()) {
+			Iris.logger.warn("Shaderpack phase 1/2 runtime diff details:\n{}", shaderPackPipelineRuntimeDiff.dump());
+		}
 	}
 
 	private ComputeProgram[] createShadowComputes(ComputeSource[] compute, ProgramSet programSet) {
@@ -1040,6 +1051,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 		int describedPasses = shaderPackPipelineDescription.stages().values().stream().mapToInt(java.util.List::size).sum();
 		messages.addLine("[Iris] Shaderpack pipeline description: " + describedPasses + " passes, " + shaderPackPipelineDescription.externalDrawPhases().size() + " external phases");
+		messages.addLine("[Iris] Shaderpack phase 1/2 runtime diff: " + shaderPackPipelineRuntimeDiff.summary());
 	}
 
 	@Override
@@ -1194,6 +1206,23 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 	public String dumpShaderPackPipelineDescription() {
 		return ShaderPackPipelineDebugDump.dump(shaderPackPipelineDescription);
+	}
+
+	public String dumpShaderPackPipelineRuntimeDiff() {
+		return shaderPackPipelineRuntimeDiff.dump();
+	}
+
+	private ShaderPackPipelineRuntimeSnapshot snapshotRuntimePipeline() {
+		Map<ShaderPackPassStage, List<ShaderPackRuntimePassSnapshot>> passesByStage = new EnumMap<>(ShaderPackPassStage.class);
+		passesByStage.put(ShaderPackPassStage.BEGIN, beginRenderer.snapshotRuntimePasses());
+		passesByStage.put(ShaderPackPassStage.PREPARE, prepareRenderer.snapshotRuntimePasses());
+		passesByStage.put(ShaderPackPassStage.DEFERRED, deferredRenderer.snapshotRuntimePasses());
+		passesByStage.put(ShaderPackPassStage.COMPOSITE, compositeRenderer.snapshotRuntimePasses());
+		if (shadowCompositeRenderer != null) {
+			passesByStage.put(ShaderPackPassStage.SHADOW_COMPOSITE, shadowCompositeRenderer.snapshotRuntimePasses());
+		}
+
+		return new ShaderPackPipelineRuntimeSnapshot(passesByStage);
 	}
 
 	private List<ShaderPackPass> passesFor(ShaderPackPassStage stage) {
