@@ -54,6 +54,10 @@ import net.irisshaders.iris.pbr.texture.PBRTextureManager;
 import net.irisshaders.iris.pbr.texture.PBRType;
 import net.irisshaders.iris.pipeline.description.CompatibilityResourceDirective;
 import net.irisshaders.iris.pipeline.description.CompatibilityResourceKind;
+import net.irisshaders.iris.pipeline.description.ExternalDrawBoundary;
+import net.irisshaders.iris.pipeline.description.ExternalDrawPhasePass;
+import net.irisshaders.iris.pipeline.description.ExternalDrawResolvedState;
+import net.irisshaders.iris.pipeline.description.ExternalDrawRuntimeDescriptor;
 import net.irisshaders.iris.pipeline.description.ShaderPackPass;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassLayout;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassResource;
@@ -826,6 +830,38 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 			shouldRemovePhase = false;
 			GLDebug.popGroup();
 		}
+	}
+
+	public Optional<ExternalDrawResolvedState> resolveCurrentExternalDrawState(ShaderKey shaderKey) {
+		WorldRenderingPhase currentPhase = getPhase();
+		ExternalDrawBoundary boundary = isBeforeTranslucent ? ExternalDrawBoundary.BEFORE_TRANSLUCENT : ExternalDrawBoundary.AFTER_TRANSLUCENT;
+
+		for (ExternalDrawPhasePass phasePass : shaderPackPipelineDescription.externalDrawPhases()) {
+			if (phasePass.worldPhase() != currentPhase) {
+				continue;
+			}
+
+			ExternalDrawRuntimeDescriptor fallback = null;
+			for (ExternalDrawRuntimeDescriptor descriptor : phasePass.runtimeDescriptors()) {
+				if (descriptor.shaderKey() != shaderKey) {
+					continue;
+				}
+				if (descriptor.boundary() == boundary || descriptor.boundary() == ExternalDrawBoundary.NONE) {
+					return Optional.of(new ExternalDrawResolvedState(currentPhase, phasePass, descriptor, null,
+						isBeforeTranslucent ? flippedAfterPrepare : flippedAfterTranslucent, shaderKey));
+				}
+				if (fallback == null) {
+					fallback = descriptor;
+				}
+			}
+
+			if (fallback != null) {
+				return Optional.of(new ExternalDrawResolvedState(currentPhase, phasePass, fallback, null,
+					isBeforeTranslucent ? flippedAfterPrepare : flippedAfterTranslucent, shaderKey));
+			}
+		}
+
+		return Optional.empty();
 	}
 
 	@Override

@@ -116,8 +116,7 @@ public final class ShaderPackPipelineDebugDump {
 			out.append("- worldPhase=").append(phase.worldPhase()).append('\n');
 			out.append("  phaseClass=").append(phase.phaseClass()).append('\n');
 			out.append("  participatesInOverride=").append(phase.participatesInOverride()).append('\n');
-			out.append("  shaderKeyPolicy=").append(phase.shaderKeyPolicy()).append('\n');
-			out.append("  hostPipelineSelectorDescriptor=").append(phase.hostPipelineSelectorDescriptor()).append('\n');
+			out.append("  hostPipelineSelectorDescriptorIds=").append(phase.hostPipelineSelectorDescriptorIds()).append('\n');
 			out.append("  framebufferPolicy=").append(phase.framebufferPolicy()).append('\n');
 			out.append("  runtimeViewPolicy=").append(phase.runtimeViewPolicy()).append('\n');
 			out.append("  bindingPolicy=").append(phase.bindingPolicy()).append('\n');
@@ -125,7 +124,7 @@ public final class ShaderPackPipelineDebugDump {
 			out.append("  pbrHookPolicy=").append(phase.pbrHookPolicy()).append('\n');
 			out.append("  sodiumPolicy=").append(phase.sodiumPolicy()).append('\n');
 			out.append("  passthroughReason=").append(phase.passthroughReason()).append('\n');
-			out.append("  shaderKeys=").append(phase.shaderKeys()).append('\n');
+			out.append("  shaderKeys=").append(phase.shaderKeys().stream().map(Enum::name).sorted().collect(Collectors.toList())).append('\n');
 			out.append("  runtimeDescriptors=").append(phase.runtimeDescriptors().stream().map(ExternalDrawRuntimeDescriptor::debugSummary).collect(Collectors.toList())).append('\n');
 		}
 	}

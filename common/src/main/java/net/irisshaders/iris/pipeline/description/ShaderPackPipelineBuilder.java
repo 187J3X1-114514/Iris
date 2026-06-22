@@ -559,46 +559,31 @@ public final class ShaderPackPipelineBuilder {
 	}
 
 	private ExternalDrawPhasePass externalPhase(WorldRenderingPhase phase) {
-		String phaseClass = phaseClass(phase);
+		ExternalDrawPhaseClass phaseClass = phaseClass(phase);
 		boolean participates = phase != WorldRenderingPhase.NONE && phase != WorldRenderingPhase.DEBUG;
-		String passthroughReason = participates ? "" : (phase == WorldRenderingPhase.NONE ? "no active world rendering phase" : "debug rendering is not shaderpack-overridden by this metadata pass");
-		List<String> shaderKeys = shaderKeysFor(phase).stream().map(Enum::name).sorted().collect(Collectors.toList());
-		String selector = phase == WorldRenderingPhase.NONE ? "none" : externalSelectorDescriptor(shaderKeysFor(phase));
-		String framebufferPolicy = switch (phaseClass) {
-			case "shadow" -> "shadow framebuffer resolver";
-			case "hand" -> "hand framebuffer resolver with beginHand depth copy";
-			case "translucent", "particles", "clouds", "weather", "world-border" -> "before/after translucent framebuffer resolver";
-			default -> participates ? "gbuffers framebuffer resolver" : "passthrough";
-		};
-		String runtimeViewPolicy = switch (phaseClass) {
-			case "hand" -> "runtime hand state selects hand/hand_water and pre-hand depth view";
-			case "translucent", "particles", "clouds", "weather", "world-border" -> "isBeforeTranslucent selects flippedAfterPrepare/flippedAfterTranslucent views";
-			case "shadow" -> "ShadowRenderingState selects shadow targets";
-			default -> participates ? "WorldRenderingPhase selects ShaderKey and current colortex views" : "none";
-		};
-		String sodiumPolicy = phaseClass.equals("terrain") ? "sodium namespace pipelines select SODIUM_TERRAIN_* ShaderKey and Iris terrain vertex format" :
-			phaseClass.equals("shadow") ? "shadow render section manager and sodium shadow terrain keys participate" : "not sodium-specific";
+		ExternalDrawPassthroughReason passthroughReason = participates ? ExternalDrawPassthroughReason.NONE
+			: (phase == WorldRenderingPhase.NONE ? ExternalDrawPassthroughReason.NO_ACTIVE_WORLD_RENDERING_PHASE : ExternalDrawPassthroughReason.DEBUG_RENDERING_NOT_SHADERPACK_OVERRIDDEN);
+		Set<ShaderKey> shaderKeys = shaderKeysFor(phase);
 
 		return new ExternalDrawPhasePass(
 			"external/" + phase.name().toLowerCase(),
 			phase,
 			phaseClass,
-			shaderKeys.isEmpty() ? "none" : "shader keys " + shaderKeys,
-			selector,
-			framebufferPolicy,
-			runtimeViewPolicy,
-			participates ? "ExtendedShader sampler/image/SSBO policy" : "none",
+			shaderKeys,
+			phase == WorldRenderingPhase.NONE ? List.of() : externalSelectorDescriptorIds(shaderKeys),
+			framebufferPolicy(phaseClass, participates),
+			runtimeViewPolicy(phaseClass, participates),
+			participates ? ExternalDrawBindingPolicy.EXTENDED_SHADER_WORLD : ExternalDrawBindingPolicy.NONE,
 			vertexFormatPolicy(phaseClass),
-			participates ? "Sampler0 albedo/PBR hook resolved at runtime when UV0 is present" : "none",
-			sodiumPolicy,
+			participates ? ExternalDrawPbrHookPolicy.SAMPLER0_ALBEDO_AND_PBR_RUNTIME_HOOK : ExternalDrawPbrHookPolicy.NONE,
+			sodiumPolicy(phaseClass),
 			participates,
 			passthroughReason,
-			shaderKeys,
-			externalRuntimeDescriptors(phase, phaseClass, shaderKeysFor(phase), participates)
+			externalRuntimeDescriptors(phase, phaseClass, shaderKeys, participates)
 		);
 	}
 
-	private List<ExternalDrawRuntimeDescriptor> externalRuntimeDescriptors(WorldRenderingPhase phase, String phaseClass, Set<ShaderKey> shaderKeys, boolean participates) {
+	private List<ExternalDrawRuntimeDescriptor> externalRuntimeDescriptors(WorldRenderingPhase phase, ExternalDrawPhaseClass phaseClass, Set<ShaderKey> shaderKeys, boolean participates) {
 		if (!participates) {
 			return List.of();
 		}
@@ -616,8 +601,8 @@ public final class ShaderPackPipelineBuilder {
 				Set<Integer> writesToAlt = externalWritesToAlt(boundary, drawBuffers);
 				DerivedFramebufferKey key = DerivedFramebufferKey.of("external-draw:" + phase.name() + ":" + shaderKey.name() + ":" + boundary.name());
 				descriptors.add(new ExternalDrawRuntimeDescriptor(boundary, shaderKey, binding, key, drawBuffers, sortedArray(writesToMain), sortedArray(writesToAlt),
-					"ProgramSource.directives.drawBuffers",
-					"boundary selects main/alt view only; it does not change drawBuffers target set",
+					drawBufferSource(shaderKey),
+					ExternalDrawTargetSetPolicy.DRAWBUFFERS_DEFINE_COLOR_ATTACHMENTS_BOUNDARY_SELECTS_MAIN_ALT,
 					externalRuntimeViewPolicy(boundary)));
 			}
 		}
@@ -625,9 +610,9 @@ public final class ShaderPackPipelineBuilder {
 		return List.copyOf(descriptors);
 	}
 
-	private boolean usesTranslucentBoundary(String phaseClass) {
+	private boolean usesTranslucentBoundary(ExternalDrawPhaseClass phaseClass) {
 		return switch (phaseClass) {
-			case "sky", "terrain", "entities", "block-entities", "hand", "translucent", "particles", "clouds", "weather", "world-border" -> true;
+			case SKY, TERRAIN, ENTITIES, BLOCK_ENTITIES, HAND, PARTICLES, CLOUDS, WEATHER, WORLD_BORDER -> true;
 			default -> false;
 		};
 	}
@@ -670,52 +655,84 @@ public final class ShaderPackPipelineBuilder {
 		return values.stream().sorted().mapToInt(Integer::intValue).toArray();
 	}
 
-	private String externalRuntimeViewPolicy(ExternalDrawBoundary boundary) {
+	private ExternalDrawDrawBufferSource drawBufferSource(ShaderKey shaderKey) {
+		return programSet.get(shaderKey.getProgram()).isPresent()
+			? ExternalDrawDrawBufferSource.PROGRAM_SOURCE_DIRECTIVES
+			: ExternalDrawDrawBufferSource.FALLBACK_COLORTEX0;
+	}
+
+	private ExternalDrawRuntimeViewPolicy externalRuntimeViewPolicy(ExternalDrawBoundary boundary) {
 		return switch (boundary) {
-			case BEFORE_TRANSLUCENT -> "flippedAfterPrepare";
-			case AFTER_TRANSLUCENT -> "flippedAfterTranslucent";
-			case NONE -> "phase-local current view";
+			case BEFORE_TRANSLUCENT -> ExternalDrawRuntimeViewPolicy.BEFORE_AFTER_TRANSLUCENT;
+			case AFTER_TRANSLUCENT -> ExternalDrawRuntimeViewPolicy.BEFORE_AFTER_TRANSLUCENT;
+			case NONE -> ExternalDrawRuntimeViewPolicy.WORLD_PHASE_CURRENT_VIEW;
 		};
 	}
 
-	private String externalSelectorDescriptor(Set<ShaderKey> shaderKeys) {
-		List<String> descriptors = IrisPipelines.externalDrawHostPipelineDescriptors().stream()
+	private List<String> externalSelectorDescriptorIds(Set<ShaderKey> shaderKeys) {
+		return IrisPipelines.externalDrawHostPipelineDescriptors().stream()
 			.filter(descriptor -> shaderKeys.contains(descriptor.shaderKey()))
-			.map(this::selectorSummary)
+			.map(ExternalDrawHostPipelineDescriptor::descriptorId)
 			.sorted()
 			.toList();
-		return descriptors.isEmpty() ? "IrisPipelines runtime selector; no direct host pipeline rows for this phase" : descriptors.toString();
 	}
 
-	private String selectorSummary(ExternalDrawHostPipelineDescriptor descriptor) {
-		return descriptor.descriptorId() + "->" + descriptor.shaderKey().name() + "{policy=" + descriptor.selectorPolicy()
-			+ ",deps=" + descriptor.runtimeDependencies() + "}";
-	}
-
-	private String phaseClass(WorldRenderingPhase phase) {
-		return switch (phase) {
-			case SKY, SUNSET, CUSTOM_SKY, SUN, MOON, STARS, VOID -> "sky";
-			case TERRAIN_SOLID, TERRAIN_CUTOUT_MIPPED, TERRAIN_CUTOUT, TERRAIN_TRANSLUCENT, TRIPWIRE -> "terrain";
-			case ENTITIES, DESTROY, OUTLINE -> "entities";
-			case BLOCK_ENTITIES -> "block-entities";
-			case HAND_SOLID, HAND_TRANSLUCENT -> "hand";
-			case PARTICLES -> "particles";
-			case CLOUDS -> "clouds";
-			case RAIN_SNOW -> "weather";
-			case WORLD_BORDER -> "world-border";
-			case DEBUG -> "debug";
-			case NONE -> "none";
+	private ExternalDrawFramebufferPolicy framebufferPolicy(ExternalDrawPhaseClass phaseClass, boolean participates) {
+		if (!participates) {
+			return ExternalDrawFramebufferPolicy.PASSTHROUGH;
+		}
+		return switch (phaseClass) {
+			case SHADOW -> ExternalDrawFramebufferPolicy.SHADOW;
+			case HAND -> ExternalDrawFramebufferPolicy.GBUFFERS_HAND;
+			case PARTICLES, CLOUDS, WEATHER, WORLD_BORDER -> ExternalDrawFramebufferPolicy.GBUFFERS_TRANSLUCENT_BOUNDARY;
+			default -> ExternalDrawFramebufferPolicy.GBUFFERS;
 		};
 	}
 
-	private String vertexFormatPolicy(String phaseClass) {
+	private ExternalDrawRuntimeViewPolicy runtimeViewPolicy(ExternalDrawPhaseClass phaseClass, boolean participates) {
+		if (!participates) {
+			return ExternalDrawRuntimeViewPolicy.NONE;
+		}
 		return switch (phaseClass) {
-			case "terrain" -> "Iris/Sodium terrain vertex format policy";
-			case "entities", "block-entities", "hand" -> "entity vertex format policy";
-			case "particles", "weather" -> "particle vertex format policy";
-			case "clouds" -> "cloud vertex format policy";
-			case "sky", "world-border" -> "host pipeline vertex format policy";
-			default -> "none";
+			case HAND -> ExternalDrawRuntimeViewPolicy.HAND_STATE_WITH_PRE_HAND_DEPTH;
+			case PARTICLES, CLOUDS, WEATHER, WORLD_BORDER -> ExternalDrawRuntimeViewPolicy.BEFORE_AFTER_TRANSLUCENT;
+			case SHADOW -> ExternalDrawRuntimeViewPolicy.SHADOW_RENDER_TARGETS;
+			default -> ExternalDrawRuntimeViewPolicy.WORLD_PHASE_CURRENT_VIEW;
+		};
+	}
+
+	private ExternalDrawPhaseClass phaseClass(WorldRenderingPhase phase) {
+		return switch (phase) {
+			case SKY, SUNSET, CUSTOM_SKY, SUN, MOON, STARS, VOID -> ExternalDrawPhaseClass.SKY;
+			case TERRAIN_SOLID, TERRAIN_CUTOUT_MIPPED, TERRAIN_CUTOUT, TERRAIN_TRANSLUCENT, TRIPWIRE -> ExternalDrawPhaseClass.TERRAIN;
+			case ENTITIES, DESTROY, OUTLINE -> ExternalDrawPhaseClass.ENTITIES;
+			case BLOCK_ENTITIES -> ExternalDrawPhaseClass.BLOCK_ENTITIES;
+			case HAND_SOLID, HAND_TRANSLUCENT -> ExternalDrawPhaseClass.HAND;
+			case PARTICLES -> ExternalDrawPhaseClass.PARTICLES;
+			case CLOUDS -> ExternalDrawPhaseClass.CLOUDS;
+			case RAIN_SNOW -> ExternalDrawPhaseClass.WEATHER;
+			case WORLD_BORDER -> ExternalDrawPhaseClass.WORLD_BORDER;
+			case DEBUG -> ExternalDrawPhaseClass.DEBUG;
+			case NONE -> ExternalDrawPhaseClass.NONE;
+		};
+	}
+
+	private ExternalDrawVertexFormatPolicy vertexFormatPolicy(ExternalDrawPhaseClass phaseClass) {
+		return switch (phaseClass) {
+			case TERRAIN -> ExternalDrawVertexFormatPolicy.IRIS_SODIUM_TERRAIN;
+			case ENTITIES, BLOCK_ENTITIES, HAND -> ExternalDrawVertexFormatPolicy.ENTITY;
+			case PARTICLES, WEATHER -> ExternalDrawVertexFormatPolicy.PARTICLE;
+			case CLOUDS -> ExternalDrawVertexFormatPolicy.CLOUD;
+			case SKY, WORLD_BORDER -> ExternalDrawVertexFormatPolicy.HOST_PIPELINE;
+			default -> ExternalDrawVertexFormatPolicy.NONE;
+		};
+	}
+
+	private ExternalDrawSodiumPolicy sodiumPolicy(ExternalDrawPhaseClass phaseClass) {
+		return switch (phaseClass) {
+			case TERRAIN -> ExternalDrawSodiumPolicy.SODIUM_TERRAIN_VERTEX_FORMAT;
+			case SHADOW -> ExternalDrawSodiumPolicy.SODIUM_SHADOW_TERRAIN_VERTEX_FORMAT;
+			default -> ExternalDrawSodiumPolicy.NONE;
 		};
 	}
 

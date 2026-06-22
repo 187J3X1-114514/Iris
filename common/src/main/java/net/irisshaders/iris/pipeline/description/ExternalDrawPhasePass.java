@@ -1,28 +1,30 @@
 package net.irisshaders.iris.pipeline.description;
 
 import net.irisshaders.iris.pipeline.WorldRenderingPhase;
+import net.irisshaders.iris.pipeline.programs.ShaderKey;
 
 import java.util.List;
+import java.util.Set;
 
 public record ExternalDrawPhasePass(
 	String id,
 	WorldRenderingPhase worldPhase,
-	String phaseClass,
-	String shaderKeyPolicy,
-	String hostPipelineSelectorDescriptor,
-	String framebufferPolicy,
-	String runtimeViewPolicy,
-	String bindingPolicy,
-	String vertexFormatPolicy,
-	String pbrHookPolicy,
-	String sodiumPolicy,
+	ExternalDrawPhaseClass phaseClass,
+	Set<ShaderKey> shaderKeys,
+	List<String> hostPipelineSelectorDescriptorIds,
+	ExternalDrawFramebufferPolicy framebufferPolicy,
+	ExternalDrawRuntimeViewPolicy runtimeViewPolicy,
+	ExternalDrawBindingPolicy bindingPolicy,
+	ExternalDrawVertexFormatPolicy vertexFormatPolicy,
+	ExternalDrawPbrHookPolicy pbrHookPolicy,
+	ExternalDrawSodiumPolicy sodiumPolicy,
 	boolean participatesInOverride,
-	String passthroughReason,
-	List<String> shaderKeys,
+	ExternalDrawPassthroughReason passthroughReason,
 	List<ExternalDrawRuntimeDescriptor> runtimeDescriptors
 ) {
 	public ExternalDrawPhasePass {
-		shaderKeys = List.copyOf(shaderKeys);
+		shaderKeys = Set.copyOf(shaderKeys);
+		hostPipelineSelectorDescriptorIds = List.copyOf(hostPipelineSelectorDescriptorIds);
 		runtimeDescriptors = List.copyOf(runtimeDescriptors);
 	}
 }

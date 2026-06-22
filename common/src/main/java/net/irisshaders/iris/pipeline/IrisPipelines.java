@@ -14,8 +14,10 @@ import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static net.irisshaders.iris.pipeline.programs.ShaderOverrides.isBlockEntities;
 
@@ -34,14 +36,14 @@ public class IrisPipelines {
 		assignToMain(RenderPipelines.TRANSLUCENT_TERRAIN, p -> ShaderKey.TERRAIN_TRANSLUCENT);
 		assignToMain(RenderPipelines.TRANSLUCENT_BLOCK, p -> ShaderKey.MOVING_BLOCK);
 		assignToMain(RenderPipelines.WORLD_BORDER, p -> ShaderKey.TEXTURED);
-		assignToMain(RenderPipelines.ENTITY_CUTOUT, p -> getCutout(p));
-		assignToMain(RenderPipelines.ENTITY_CUTOUT_CULL, p -> getCutout(p));
-		assignToMain(RenderPipelines.ENTITY_CUTOUT_DISSOLVE, p -> getCutout(p));
-		assignToMain(RenderPipelines.ENTITY_TRANSLUCENT_CULL, p -> getTranslucent(p));
-		assignToMain(RenderPipelines.ITEM_TRANSLUCENT, p -> getTranslucent(p));
-		assignToMain(RenderPipelines.ITEM_CUTOUT, p -> getCutout(p));
-		assignToMain(RenderPipelines.ENTITY_TRANSLUCENT, p -> getTranslucent(p));
-		assignToMain(RenderPipelines.ENTITY_SHADOW, p -> getTranslucent(p));
+		assignToMain(RenderPipelines.ENTITY_CUTOUT, p -> getCutout(p), ShaderKey.ENTITIES_CUTOUT_DIFFUSE, ExternalDrawSelectorPolicy.ENTITY_CUTOUT);
+		assignToMain(RenderPipelines.ENTITY_CUTOUT_CULL, p -> getCutout(p), ShaderKey.ENTITIES_CUTOUT_DIFFUSE, ExternalDrawSelectorPolicy.ENTITY_CUTOUT);
+		assignToMain(RenderPipelines.ENTITY_CUTOUT_DISSOLVE, p -> getCutout(p), ShaderKey.ENTITIES_CUTOUT_DIFFUSE, ExternalDrawSelectorPolicy.ENTITY_CUTOUT);
+		assignToMain(RenderPipelines.ENTITY_TRANSLUCENT_CULL, p -> getTranslucent(p), ShaderKey.ENTITIES_TRANSLUCENT, ExternalDrawSelectorPolicy.ENTITY_TRANSLUCENT);
+		assignToMain(RenderPipelines.ITEM_TRANSLUCENT, p -> getTranslucent(p), ShaderKey.ENTITIES_TRANSLUCENT, ExternalDrawSelectorPolicy.ENTITY_TRANSLUCENT);
+		assignToMain(RenderPipelines.ITEM_CUTOUT, p -> getCutout(p), ShaderKey.ENTITIES_CUTOUT_DIFFUSE, ExternalDrawSelectorPolicy.ENTITY_CUTOUT);
+		assignToMain(RenderPipelines.ENTITY_TRANSLUCENT, p -> getTranslucent(p), ShaderKey.ENTITIES_TRANSLUCENT, ExternalDrawSelectorPolicy.ENTITY_TRANSLUCENT);
+		assignToMain(RenderPipelines.ENTITY_SHADOW, p -> getTranslucent(p), ShaderKey.ENTITIES_TRANSLUCENT, ExternalDrawSelectorPolicy.ENTITY_TRANSLUCENT);
 		assignToMain(RenderPipelines.LINES, p -> ShaderKey.LINES);
 		assignToMain(RenderPipelines.LINES_TRANSLUCENT, p -> ShaderKey.LINES);
 		assignToMain(RenderPipelines.SECONDARY_BLOCK_OUTLINE, p -> ShaderKey.LINES);
@@ -53,14 +55,14 @@ public class IrisPipelines {
 		assignToMain(RenderPipelines.TRANSLUCENT_PARTICLE, p -> ShaderKey.PARTICLES_TRANS);
 		assignToMain(RenderPipelines.WATER_MASK, p -> ShaderKey.BASIC);
 		assignToMain(RenderPipelines.GLINT, p -> ShaderKey.GLINT);
-		assignToMain(RenderPipelines.ARMOR_CUTOUT_NO_CULL, p -> getCutout(p));
+		assignToMain(RenderPipelines.ARMOR_CUTOUT_NO_CULL, p -> getCutout(p), ShaderKey.ENTITIES_CUTOUT_DIFFUSE, ExternalDrawSelectorPolicy.ENTITY_CUTOUT);
 		assignToMain(RenderPipelines.EYES, p -> ShaderKey.ENTITIES_EYES);
 		assignToMain(RenderPipelines.ENTITY_TRANSLUCENT_EMISSIVE, p -> ShaderKey.ENTITIES_EYES_TRANS);
-		assignToMain(RenderPipelines.ARMOR_DECAL_CUTOUT_NO_CULL, p -> getCutout(p));
-		assignToMain(RenderPipelines.ARMOR_TRANSLUCENT, p -> getTranslucent(p));
-		assignToMain(RenderPipelines.BREEZE_WIND, p -> getTranslucent(p));
-		assignToMain(RenderPipelines.ENTITY_SOLID, p -> getSolid(p));
-		assignToMain(RenderPipelines.ENTITY_SOLID_Z_OFFSET_FORWARD, p -> getSolid(p));
+		assignToMain(RenderPipelines.ARMOR_DECAL_CUTOUT_NO_CULL, p -> getCutout(p), ShaderKey.ENTITIES_CUTOUT_DIFFUSE, ExternalDrawSelectorPolicy.ENTITY_CUTOUT);
+		assignToMain(RenderPipelines.ARMOR_TRANSLUCENT, p -> getTranslucent(p), ShaderKey.ENTITIES_TRANSLUCENT, ExternalDrawSelectorPolicy.ENTITY_TRANSLUCENT);
+		assignToMain(RenderPipelines.BREEZE_WIND, p -> getTranslucent(p), ShaderKey.ENTITIES_TRANSLUCENT, ExternalDrawSelectorPolicy.ENTITY_TRANSLUCENT);
+		assignToMain(RenderPipelines.ENTITY_SOLID, p -> getSolid(p), ShaderKey.ENTITIES_SOLID, ExternalDrawSelectorPolicy.ENTITY_SOLID);
+		assignToMain(RenderPipelines.ENTITY_SOLID_Z_OFFSET_FORWARD, p -> getSolid(p), ShaderKey.ENTITIES_SOLID, ExternalDrawSelectorPolicy.ENTITY_SOLID);
 		assignToMain(RenderPipelines.END_GATEWAY, p -> ShaderKey.BLOCK_ENTITY);
 		assignToMain(RenderPipelines.ENERGY_SWIRL, p -> ShaderKey.ENTITIES_CUTOUT);
 		assignToMain(RenderPipelines.END_CRYSTAL_BEAM, p -> ShaderKey.ENTITIES_CUTOUT);
@@ -73,18 +75,18 @@ public class IrisPipelines {
 		assignToMain(RenderPipelines.END_SKY, p -> ShaderKey.SKY_TEXTURED);
 		assignToMain(RenderPipelines.WEATHER_DEPTH_WRITE, p -> ShaderKey.WEATHER);
 		assignToMain(RenderPipelines.WEATHER_NO_DEPTH_WRITE, p -> ShaderKey.WEATHER);
-		assignToMain(RenderPipelines.TEXT, p -> getText(p));
-		assignToMain(RenderPipelines.TEXT_POLYGON_OFFSET, p -> getText(p));
-		assignToMain(RenderPipelines.TEXT_SEE_THROUGH, p -> getText(p));
-		assignToMain(RenderPipelines.TEXT_GRAYSCALE_SEE_THROUGH, p -> getTextIntensity(p));
+		assignToMain(RenderPipelines.TEXT, p -> getText(p), ShaderKey.TEXT, ExternalDrawSelectorPolicy.TEXT);
+		assignToMain(RenderPipelines.TEXT_POLYGON_OFFSET, p -> getText(p), ShaderKey.TEXT, ExternalDrawSelectorPolicy.TEXT);
+		assignToMain(RenderPipelines.TEXT_SEE_THROUGH, p -> getText(p), ShaderKey.TEXT, ExternalDrawSelectorPolicy.TEXT);
+		assignToMain(RenderPipelines.TEXT_GRAYSCALE_SEE_THROUGH, p -> getTextIntensity(p), ShaderKey.TEXT_INTENSITY, ExternalDrawSelectorPolicy.TEXT_INTENSITY);
 		assignToMain(RenderPipelines.TEXT_BACKGROUND, p -> ShaderKey.TEXT_BG);
 		assignToMain(RenderPipelines.TEXT_BACKGROUND_SEE_THROUGH, p -> ShaderKey.TEXT_BG);
-		assignToMain(RenderPipelines.TEXT_GRAYSCALE, p -> getTextIntensity(p));
+		assignToMain(RenderPipelines.TEXT_GRAYSCALE, p -> getTextIntensity(p), ShaderKey.TEXT_INTENSITY, ExternalDrawSelectorPolicy.TEXT_INTENSITY);
 		assignToMain(RenderPipelines.CRUMBLING, p -> ShaderKey.CRUMBLING);
 		assignToMain(RenderPipelines.LEASH, p -> ShaderKey.LEASH);
 		assignToMain(RenderPipelines.CLOUDS, p -> ShaderKey.CLOUDS);
 		assignToMain(RenderPipelines.FLAT_CLOUDS, p -> ShaderKey.CLOUDS);
-		assignToMain(RenderPipelines.BANNER_PATTERN, p -> getTranslucent(p));
+		assignToMain(RenderPipelines.BANNER_PATTERN, p -> getTranslucent(p), ShaderKey.ENTITIES_TRANSLUCENT, ExternalDrawSelectorPolicy.ENTITY_TRANSLUCENT);
 
 		assignToShadow(RenderPipelines.SOLID_BLOCK, p -> ShaderKey.SHADOW_TERRAIN_CUTOUT);
 		assignToShadow(RenderPipelines.SOLID_TERRAIN, p -> ShaderKey.SHADOW_TERRAIN_CUTOUT);
@@ -169,10 +171,10 @@ public class IrisPipelines {
 
 	private static void assignToMain(RenderPipeline pipeline, Function<IrisRenderingPipeline, ShaderKey> o) {
 		ShaderKey representativeKey = o.apply(null);
-		assignToMain(pipeline, o, representativeKey, "static shader key selector");
+		assignToMain(pipeline, o, representativeKey, ExternalDrawSelectorPolicy.STATIC_SHADER_KEY);
 	}
 
-	private static void assignToMain(RenderPipeline pipeline, Function<IrisRenderingPipeline, ShaderKey> o, ShaderKey representativeKey, String selectorPolicy) {
+	private static void assignToMain(RenderPipeline pipeline, Function<IrisRenderingPipeline, ShaderKey> o, ShaderKey representativeKey, ExternalDrawSelectorPolicy selectorPolicy) {
 		if (coreShaderMap.containsKey(pipeline)) {
 			Function<IrisRenderingPipeline, ShaderKey> current = coreShaderMap.get(pipeline);
 			ShaderKey currentKey = current.apply(null);
@@ -192,17 +194,20 @@ public class IrisPipelines {
 		}
 
 		coreShaderMapShadow.put(pipeline, o);
-		coreShaderShadowMetadata.put(pipeline, descriptor(pipeline, o.apply(null), true, "shadow shader key selector"));
+		coreShaderShadowMetadata.put(pipeline, descriptor(pipeline, o.apply(null), true, ExternalDrawSelectorPolicy.SHADOW_SHADER_KEY));
 	}
 
-	private static ExternalDrawHostPipelineDescriptor descriptor(RenderPipeline pipeline, ShaderKey key, boolean shadow, String selectorPolicy) {
+	private static ExternalDrawHostPipelineDescriptor descriptor(RenderPipeline pipeline, ShaderKey key, boolean shadow, ExternalDrawSelectorPolicy selectorPolicy) {
 		String hostPipelineId = pipeline.getLocation().toString();
 		String descriptorId = (shadow ? "shadow:" : "main:") + hostPipelineId;
-		String dependencies = shadow ? "ShadowRenderingState" : switch (selectorPolicy) {
-			case "entity cutout selector", "entity translucent selector", "text selector", "text intensity selector" -> "WorldRenderingPhase, HandRenderer";
-			default -> "WorldRenderingPhase";
-		};
-		return new ExternalDrawHostPipelineDescriptor(descriptorId, hostPipelineId, key, shadow, selectorPolicy, dependencies, "");
+		Set<ExternalDrawRuntimeDependency> dependencies = shadow
+			? EnumSet.of(ExternalDrawRuntimeDependency.SHADOW_RENDERING_STATE, ExternalDrawRuntimeDependency.WORLD_RENDERING_PHASE)
+			: switch (selectorPolicy) {
+				case ENTITY_CUTOUT, ENTITY_TRANSLUCENT, ENTITY_SOLID, TEXT, TEXT_INTENSITY ->
+					EnumSet.of(ExternalDrawRuntimeDependency.WORLD_RENDERING_PHASE, ExternalDrawRuntimeDependency.HAND_RENDERER);
+				default -> EnumSet.of(ExternalDrawRuntimeDependency.WORLD_RENDERING_PHASE);
+			};
+		return new ExternalDrawHostPipelineDescriptor(descriptorId, hostPipelineId, key, shadow, selectorPolicy, dependencies);
 	}
 
 	private static ShaderKey getCutout(Object p) {
@@ -268,22 +273,26 @@ public class IrisPipelines {
 		List<ExternalDrawHostPipelineDescriptor> descriptors = new ArrayList<>();
 		descriptors.addAll(coreShaderMetadata.values());
 		descriptors.addAll(coreShaderShadowMetadata.values());
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("main:sodium-terrain-solid", "sodium:*", ShaderKey.SODIUM_TERRAIN_SOLID, false, "sodium namespace without CUTOUT or blend", "RenderPipeline namespace, shader defines, blend function", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("main:sodium-terrain-cutout", "sodium:*", ShaderKey.SODIUM_TERRAIN_CUTOUT, false, "sodium namespace with CUTOUT define", "RenderPipeline namespace, shader defines, blend function", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("main:sodium-terrain-translucent", "sodium:*", ShaderKey.SODIUM_TERRAIN_TRANSLUCENT, false, "sodium namespace with blend function", "RenderPipeline namespace, shader defines, blend function", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("shadow:sodium-terrain-solid", "sodium:*", ShaderKey.SHADOW_SODIUM_TERRAIN_SOLID, true, "shadow sodium namespace without CUTOUT or blend", "ShadowRenderingState, RenderPipeline namespace, shader defines, blend function", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("shadow:sodium-terrain-cutout", "sodium:*", ShaderKey.SHADOW_SODIUM_TERRAIN_CUTOUT, true, "shadow sodium namespace with CUTOUT define", "ShadowRenderingState, RenderPipeline namespace, shader defines, blend function", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("shadow:sodium-terrain-translucent", "sodium:*", ShaderKey.SHADOW_SODIUM_TERRAIN_TRANSLUCENT, true, "shadow sodium namespace with blend function", "ShadowRenderingState, RenderPipeline namespace, shader defines, blend function", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-cutout", "minecraft:entity_*", ShaderKey.HAND_CUTOUT, false, "HandRenderer solid entity selector", "HandRenderer, WorldRenderingPhase", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-cutout-diffuse", "minecraft:entity_*", ShaderKey.HAND_CUTOUT_DIFFUSE, false, "HandRenderer solid diffuse selector", "HandRenderer, WorldRenderingPhase", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-text", "minecraft:text*", ShaderKey.HAND_TEXT, false, "HandRenderer solid text selector", "HandRenderer, WorldRenderingPhase", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-text-translucent", "minecraft:text*", ShaderKey.HAND_TEXT_TRANSLUCENT, false, "HandRenderer translucent text selector", "HandRenderer, WorldRenderingPhase", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-translucent", "minecraft:entity_*", ShaderKey.HAND_TRANSLUCENT, false, "HandRenderer translucent entity selector", "HandRenderer, WorldRenderingPhase", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-water-diffuse", "minecraft:entity_*", ShaderKey.HAND_WATER_DIFFUSE, false, "HandRenderer translucent diffuse selector", "HandRenderer, WorldRenderingPhase", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-diffuse", "minecraft:entity_*", ShaderKey.BLOCK_ENTITY_DIFFUSE, false, "block entity cutout selector", "WorldRenderingPhase.BLOCK_ENTITIES", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-translucent", "minecraft:entity_*", ShaderKey.BE_TRANSLUCENT, false, "block entity translucent selector", "WorldRenderingPhase.BLOCK_ENTITIES", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-text", "minecraft:text*", ShaderKey.TEXT_BE, false, "block entity text selector", "WorldRenderingPhase.BLOCK_ENTITIES", ""));
-		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-text-intensity", "minecraft:text*", ShaderKey.TEXT_INTENSITY_BE, false, "block entity text intensity selector", "WorldRenderingPhase.BLOCK_ENTITIES", ""));
+		Set<ExternalDrawRuntimeDependency> sodiumDeps = EnumSet.of(ExternalDrawRuntimeDependency.RENDER_PIPELINE_NAMESPACE, ExternalDrawRuntimeDependency.RENDER_PIPELINE_SHADER_DEFINES, ExternalDrawRuntimeDependency.RENDER_PIPELINE_BLEND_FUNCTION);
+		Set<ExternalDrawRuntimeDependency> shadowSodiumDeps = EnumSet.of(ExternalDrawRuntimeDependency.SHADOW_RENDERING_STATE, ExternalDrawRuntimeDependency.RENDER_PIPELINE_NAMESPACE, ExternalDrawRuntimeDependency.RENDER_PIPELINE_SHADER_DEFINES, ExternalDrawRuntimeDependency.RENDER_PIPELINE_BLEND_FUNCTION);
+		Set<ExternalDrawRuntimeDependency> handDeps = EnumSet.of(ExternalDrawRuntimeDependency.HAND_RENDERER, ExternalDrawRuntimeDependency.WORLD_RENDERING_PHASE);
+		Set<ExternalDrawRuntimeDependency> blockEntityDeps = EnumSet.of(ExternalDrawRuntimeDependency.WORLD_RENDERING_PHASE);
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("main:sodium-terrain-solid", "sodium:*", ShaderKey.SODIUM_TERRAIN_SOLID, false, ExternalDrawSelectorPolicy.SODIUM_TERRAIN_SOLID, sodiumDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("main:sodium-terrain-cutout", "sodium:*", ShaderKey.SODIUM_TERRAIN_CUTOUT, false, ExternalDrawSelectorPolicy.SODIUM_TERRAIN_CUTOUT, sodiumDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("main:sodium-terrain-translucent", "sodium:*", ShaderKey.SODIUM_TERRAIN_TRANSLUCENT, false, ExternalDrawSelectorPolicy.SODIUM_TERRAIN_TRANSLUCENT, sodiumDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("shadow:sodium-terrain-solid", "sodium:*", ShaderKey.SHADOW_SODIUM_TERRAIN_SOLID, true, ExternalDrawSelectorPolicy.SHADOW_SODIUM_TERRAIN_SOLID, shadowSodiumDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("shadow:sodium-terrain-cutout", "sodium:*", ShaderKey.SHADOW_SODIUM_TERRAIN_CUTOUT, true, ExternalDrawSelectorPolicy.SHADOW_SODIUM_TERRAIN_CUTOUT, shadowSodiumDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("shadow:sodium-terrain-translucent", "sodium:*", ShaderKey.SHADOW_SODIUM_TERRAIN_TRANSLUCENT, true, ExternalDrawSelectorPolicy.SHADOW_SODIUM_TERRAIN_TRANSLUCENT, shadowSodiumDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-cutout", "minecraft:entity_*", ShaderKey.HAND_CUTOUT, false, ExternalDrawSelectorPolicy.HAND_CUTOUT, handDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-cutout-diffuse", "minecraft:entity_*", ShaderKey.HAND_CUTOUT_DIFFUSE, false, ExternalDrawSelectorPolicy.HAND_CUTOUT_DIFFUSE, handDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-text", "minecraft:text*", ShaderKey.HAND_TEXT, false, ExternalDrawSelectorPolicy.HAND_TEXT, handDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-text-translucent", "minecraft:text*", ShaderKey.HAND_TEXT_TRANSLUCENT, false, ExternalDrawSelectorPolicy.HAND_TEXT_TRANSLUCENT, handDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-translucent", "minecraft:entity_*", ShaderKey.HAND_TRANSLUCENT, false, ExternalDrawSelectorPolicy.HAND_TRANSLUCENT, handDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-water-diffuse", "minecraft:entity_*", ShaderKey.HAND_WATER_DIFFUSE, false, ExternalDrawSelectorPolicy.HAND_WATER_DIFFUSE, handDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-diffuse", "minecraft:entity_*", ShaderKey.BLOCK_ENTITY_DIFFUSE, false, ExternalDrawSelectorPolicy.BLOCK_ENTITY_DIFFUSE, blockEntityDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-translucent", "minecraft:entity_*", ShaderKey.BE_TRANSLUCENT, false, ExternalDrawSelectorPolicy.BLOCK_ENTITY_TRANSLUCENT, blockEntityDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-text", "minecraft:text*", ShaderKey.TEXT_BE, false, ExternalDrawSelectorPolicy.BLOCK_ENTITY_TEXT, blockEntityDeps));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-text-intensity", "minecraft:text*", ShaderKey.TEXT_INTENSITY_BE, false, ExternalDrawSelectorPolicy.BLOCK_ENTITY_TEXT_INTENSITY, blockEntityDeps));
 		return descriptors.stream()
 			.sorted(Comparator.comparing(ExternalDrawHostPipelineDescriptor::descriptorId))
 			.toList();

@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,15 +48,26 @@ public record ShaderPackExternalDrawRuntimeDiff(
 			if (phasePass.participatesInOverride() && phasePass.runtimeDescriptors().isEmpty()) {
 				differences.add("participating external draw phase has no runtime descriptors: " + phase);
 			}
+			if (phasePass.participatesInOverride() && phasePass.bindingPolicy() == ExternalDrawBindingPolicy.NONE) {
+				differences.add("participating external draw phase has no binding policy: " + phase);
+			}
+			if (!phasePass.participatesInOverride() && phasePass.passthroughReason() == ExternalDrawPassthroughReason.NONE) {
+				differences.add("non-participating external draw phase lacks passthrough reason: " + phase);
+			}
 
 			checkBoundaryDescriptors(phasePass, differences);
 			checkBoundaryTargetSets(phasePass, differences);
 			checkDescriptorMatchesProgramSource(phasePass, programSet, differences);
+			checkDescriptorTargetPolicy(phasePass, differences);
 		}
 
-		Set<ShaderKey> selectorKeys = IrisPipelines.externalDrawHostPipelineDescriptors().stream()
+		List<ExternalDrawHostPipelineDescriptor> hostSelectors = IrisPipelines.externalDrawHostPipelineDescriptors();
+		Set<ShaderKey> selectorKeys = hostSelectors.stream()
 			.map(ExternalDrawHostPipelineDescriptor::shaderKey)
 			.collect(Collectors.toCollection(() -> EnumSet.noneOf(ShaderKey.class)));
+		Set<String> selectorIds = hostSelectors.stream()
+			.map(ExternalDrawHostPipelineDescriptor::descriptorId)
+			.collect(Collectors.toCollection(HashSet::new));
 		Set<ShaderKey> descriptorKeys = pipeline.externalDrawPhases().stream()
 			.flatMap(phase -> phase.runtimeDescriptors().stream())
 			.map(ExternalDrawRuntimeDescriptor::shaderKey)
@@ -67,12 +79,19 @@ public record ShaderPackExternalDrawRuntimeDiff(
 		if (!descriptorKeysWithoutSelector.isEmpty()) {
 			differences.add("external draw descriptors reference keys without host selector metadata: " + descriptorKeysWithoutSelector);
 		}
+		for (ExternalDrawPhasePass phase : pipeline.externalDrawPhases()) {
+			for (String selectorId : phase.hostPipelineSelectorDescriptorIds()) {
+				if (!selectorIds.contains(selectorId)) {
+					differences.add("external draw phase " + phase.worldPhase() + " references unknown selector descriptor id " + selectorId);
+				}
+			}
+		}
 
 		notes.add("scope=phase5-external-draw; verifies world phase matrix, runtime descriptors, and IrisPipelines selector registry");
 		notes.add("externalPhaseRows=" + byPhase.size());
 		notes.add("runtimeDescriptorCount=" + pipeline.externalDrawPhases().stream().mapToInt(phase -> phase.runtimeDescriptors().size()).sum());
 		notes.add("hostPipelineSelectorRows=" + IrisPipelines.externalDrawHostPipelineDescriptors().size());
-		notes.add("targetSetPolicy=DRAWBUFFERS/RENDERTARGETS define color attachment set; BEFORE/AFTER_TRANSLUCENT only selects main/alt view");
+		notes.add("targetSetPolicy=" + ExternalDrawTargetSetPolicy.DRAWBUFFERS_DEFINE_COLOR_ATTACHMENTS_BOUNDARY_SELECTS_MAIN_ALT);
 		notes.add("selectorKeys=" + selectorKeys.stream().map(Enum::name).sorted().toList());
 
 		return new ShaderPackExternalDrawRuntimeDiff(differences, notes);
@@ -172,6 +191,19 @@ public record ShaderPackExternalDrawRuntimeDiff(
 					+ " does not match ProgramSource " + descriptor.shaderKey().getProgram()
 					+ " drawBuffers. descriptor=" + Arrays.toString(descriptor.drawBuffers())
 					+ " source=" + Arrays.toString(sourceDrawBuffers));
+			}
+		}
+	}
+
+	private static void checkDescriptorTargetPolicy(ExternalDrawPhasePass phasePass, List<String> differences) {
+		for (ExternalDrawRuntimeDescriptor descriptor : phasePass.runtimeDescriptors()) {
+			if (descriptor.targetSetPolicy() != ExternalDrawTargetSetPolicy.DRAWBUFFERS_DEFINE_COLOR_ATTACHMENTS_BOUNDARY_SELECTS_MAIN_ALT) {
+				differences.add("external draw descriptor for " + phasePass.worldPhase() + "/" + descriptor.shaderKey()
+					+ " has unexpected target set policy " + descriptor.targetSetPolicy());
+			}
+			if (descriptor.drawBufferSource() == ExternalDrawDrawBufferSource.FALLBACK_COLORTEX0 && !Arrays.equals(descriptor.drawBuffers(), new int[] {0})) {
+				differences.add("external draw fallback descriptor for " + phasePass.worldPhase() + "/" + descriptor.shaderKey()
+					+ " does not write fallback colortex0: " + Arrays.toString(descriptor.drawBuffers()));
 			}
 		}
 	}

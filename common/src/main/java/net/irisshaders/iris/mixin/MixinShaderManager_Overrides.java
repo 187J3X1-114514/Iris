@@ -98,6 +98,10 @@ public abstract class MixinShaderManager_Overrides {
 	private static GlProgram override(IrisRenderingPipeline pipeline, RenderPipeline shaderProgram) {
 		ShaderKey shaderKey = IrisPipelines.getPipeline(pipeline, shaderProgram);
 
+		if (shaderKey != null) {
+			pipeline.resolveCurrentExternalDrawState(shaderKey);
+		}
+
 		return shaderKey == null ? null : pipeline.getShaderMap().getShader(shaderKey);
 	}
 }

@@ -12,9 +12,9 @@ public record ExternalDrawRuntimeDescriptor(
 	int[] drawBuffers,
 	int[] writesToMain,
 	int[] writesToAlt,
-	String drawBufferSource,
-	String targetSetPolicy,
-	String runtimeViewPolicy
+	ExternalDrawDrawBufferSource drawBufferSource,
+	ExternalDrawTargetSetPolicy targetSetPolicy,
+	ExternalDrawRuntimeViewPolicy runtimeViewPolicy
 ) {
 	public ExternalDrawRuntimeDescriptor {
 		drawBuffers = drawBuffers.clone();
