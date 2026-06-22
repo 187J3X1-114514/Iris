@@ -23,7 +23,7 @@ public record ShaderPackRuntimePassSnapshot(
 	boolean hasBlendOverride,
 	int computeProgramCount,
 	boolean hasGraphicsProgram,
-	String derivedFramebufferKey
+	DerivedFramebufferKey derivedFramebufferKey
 ) {
 	public ShaderPackRuntimePassSnapshot {
 		Objects.requireNonNull(id, "id");

@@ -13,10 +13,8 @@ import net.irisshaders.iris.features.FeatureFlags;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.gl.blending.BlendModeOverride;
 import net.irisshaders.iris.gl.blending.BlendModeStorage;
-import net.irisshaders.iris.gl.buffer.ShaderStorageBufferHolder;
 import net.irisshaders.iris.gl.framebuffer.GlFramebuffer;
 import net.irisshaders.iris.gl.framebuffer.ViewportData;
-import net.irisshaders.iris.gl.image.GlImage;
 import net.irisshaders.iris.gl.program.ComputeProgram;
 import net.irisshaders.iris.gl.program.Program;
 import net.irisshaders.iris.gl.program.ProgramBuilder;
@@ -28,19 +26,19 @@ import net.irisshaders.iris.mixinterface.CustomPass;
 import net.irisshaders.iris.pathways.FullScreenQuadRenderer;
 import net.irisshaders.iris.pipeline.CompositeRenderer;
 import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
+import net.irisshaders.iris.pipeline.description.DerivedFramebufferKey;
 import net.irisshaders.iris.pipeline.description.ShaderPackPass;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassLayout;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassStage;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
+import net.irisshaders.iris.pipeline.description.ShaderPackPipelineResources;
 import net.irisshaders.iris.pipeline.description.ShaderPackProgramDescriptor;
 import net.irisshaders.iris.pipeline.description.ShaderPackResourceView;
 import net.irisshaders.iris.pipeline.description.ShaderPackRuntimePassSnapshot;
 import net.irisshaders.iris.pipeline.transform.PatchShaderType;
 import net.irisshaders.iris.pipeline.transform.ShaderPrinter;
 import net.irisshaders.iris.pipeline.transform.TransformPatcher;
-import net.irisshaders.iris.samplers.IrisImages;
 import net.irisshaders.iris.samplers.IrisSamplers;
-import net.irisshaders.iris.shaderpack.FilledIndirectPointer;
 import net.irisshaders.iris.shaderpack.programs.ComputeSource;
 import net.irisshaders.iris.shaderpack.programs.ProgramSource;
 import net.irisshaders.iris.shaderpack.texture.TextureStage;
@@ -59,10 +57,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Set;
 
 public class ShadowCompositeRenderer {
 	private final ShadowRenderTargets renderTargets;
+	private final ShaderPackPipelineResources.RuntimeBindings resources;
 
 	private final ImmutableList<Pass> passes;
 	private final TextureAccess noiseTexture;
@@ -71,17 +69,17 @@ public class ShadowCompositeRenderer {
 	private final CustomUniforms customUniforms;
 	private final Object2ObjectMap<String, TextureAccess> irisCustomTextures;
 	private final WorldRenderingPipeline pipeline;
-	private final Set<GlImage> irisCustomImages;
 
-	public ShadowCompositeRenderer(WorldRenderingPipeline pipeline, List<ShaderPackPass> passDescriptions, Map<String, ProgramSource> sourcesByName, Map<String, ComputeSource> computesByName, ImmutableSet<Integer> finalFlippedBuffers, ShadowRenderTargets renderTargets, ShaderStorageBufferHolder holder,
+	public ShadowCompositeRenderer(WorldRenderingPipeline pipeline, List<ShaderPackPass> passDescriptions, Map<String, ProgramSource> sourcesByName, Map<String, ComputeSource> computesByName, ImmutableSet<Integer> finalFlippedBuffers, ShadowRenderTargets renderTargets,
+	                               ShaderPackPipelineResources.RuntimeBindings resources,
 	                               TextureAccess noiseTexture, FrameUpdateNotifier updateNotifier,
-	                               Object2ObjectMap<String, TextureAccess> customTextureIds, Set<GlImage> customImages, Object2ObjectMap<String, TextureAccess> irisCustomTextures, CustomUniforms customUniforms) {
+	                               Object2ObjectMap<String, TextureAccess> customTextureIds, Object2ObjectMap<String, TextureAccess> irisCustomTextures, CustomUniforms customUniforms) {
 		this.pipeline = pipeline;
 		this.noiseTexture = noiseTexture;
 		this.renderTargets = renderTargets;
+		this.resources = resources;
 		this.customTextureIds = customTextureIds;
 		this.irisCustomTextures = irisCustomTextures;
-		this.irisCustomImages = customImages;
 		this.customUniforms = customUniforms;
 
 		final ImmutableList.Builder<Pass> passes = ImmutableList.builder();
@@ -100,7 +98,7 @@ public class ShadowCompositeRenderer {
 				pass.name = passDescription.name();
 				pass.stage = passDescription.stage();
 				pass.type = passDescription.type();
-				pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, renderTargets, holder);
+				pass.computes = createComputes(passDescription, computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot);
 				pass.drawBuffers = layout.drawBuffers().clone();
 				pass.attachmentMapping = Map.copyOf(layout.attachmentMapping());
 				pass.explicitPreFlips = Map.copyOf(layout.explicitPreFlips());
@@ -123,10 +121,10 @@ public class ShadowCompositeRenderer {
 			pass.name = passDescription.name();
 			pass.stage = passDescription.stage();
 			pass.type = passDescription.type();
-			pass.program = createProgram(source, stageReadsFromAlt, flippedAtLeastOnceSnapshot, renderTargets);
+			pass.program = createProgram(passDescription, source, stageReadsFromAlt, flippedAtLeastOnceSnapshot);
 			pass.blendModeOverride = passDescription.behavior().blendModeOverride();
-			pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, renderTargets, holder);
-			GlFramebuffer framebuffer = renderTargets.createColorFramebuffer(stageReadsFromAlt, drawBuffers);
+			pass.computes = createComputes(passDescription, computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot);
+			GlFramebuffer framebuffer = resources.createShadowColorFramebuffer(passDescription);
 
 			pass.drawBuffers = drawBuffers;
 			pass.attachmentMapping = Map.copyOf(layout.attachmentMapping());
@@ -320,8 +318,7 @@ public class ShadowCompositeRenderer {
 	}
 
 	// TODO: Don't just copy this from DeferredWorldRenderingPipeline
-	private Program createProgram(ProgramSource source, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot,
-	                              ShadowRenderTargets targets) {
+	private Program createProgram(ShaderPackPass passDescription, ProgramSource source, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot) {
 		// TODO: Properly handle empty shaders
 		Map<PatchShaderType, String> transformed = TransformPatcher.patchComposite(
 			source.getName(),
@@ -344,26 +341,28 @@ public class ShadowCompositeRenderer {
 			throw new RuntimeException("Shader compilation failed for shadow composite " + source.getName() + "!", e);
 		}
 
-		ProgramSamplers.CustomTextureSamplerInterceptor customTextureSamplerInterceptor = ProgramSamplers.customTextureSamplerInterceptor(builder, customTextureIds, flippedAtLeastOnceSnapshot);
+		ProgramSamplers.CustomTextureSamplerInterceptor customTextureSamplerInterceptor = resources.customTextureSamplerInterceptor(builder, customTextureIds, flippedAtLeastOnceSnapshot);
 
 		CommonUniforms.addDynamicUniforms(builder, FogMode.OFF);
 		this.customUniforms.assignTo(builder);
 
-		IrisSamplers.addNoiseSampler(customTextureSamplerInterceptor, noiseTexture);
-		IrisSamplers.addCustomTextures(customTextureSamplerInterceptor, irisCustomTextures);
-
-		IrisSamplers.addShadowSamplers(customTextureSamplerInterceptor, targets, flipped, pipeline.hasFeature(FeatureFlags.SEPARATE_HARDWARE_SAMPLERS));
-		IrisImages.addShadowColorImages(builder, targets, flipped);
-		IrisImages.addCustomImages(builder, irisCustomImages);
-		IrisSamplers.addCustomImages(builder, irisCustomImages);
+		resources.installProgramBindings(passDescription, ShaderPackPipelineResources.ProgramBindingContext
+			.builder(pipeline, irisCustomTextures, noiseTexture)
+			.samplers(customTextureSamplerInterceptor)
+			.customImageSamplers(builder)
+			.images(builder)
+			.flipped(() -> flipped)
+			.shadowFlipped(flipped)
+			.shadowPass(true)
+			.separateHardwareSamplers(pipeline.hasFeature(FeatureFlags.SEPARATE_HARDWARE_SAMPLERS))
+			.build());
 		Program build = builder.build();
 		this.customUniforms.mapholderToPass(builder, build);
 
 		return build;
 	}
 
-	private ComputeProgram[] createComputes(ComputeSource[] sources, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot,
-	                                        ShadowRenderTargets targets, ShaderStorageBufferHolder holder) {
+	private ComputeProgram[] createComputes(ShaderPackPass passDescription, ComputeSource[] sources, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot) {
 		ComputeProgram[] programs = new ComputeProgram[sources.length];
 		for (int i = 0; i < programs.length; i++) {
 			ComputeSource source = sources[i];
@@ -383,24 +382,26 @@ public class ShadowCompositeRenderer {
 					throw new RuntimeException("Shader compilation failed for shadowcomp compute " + source.getName() + "!", e);
 				}
 
-				ProgramSamplers.CustomTextureSamplerInterceptor customTextureSamplerInterceptor = ProgramSamplers.customTextureSamplerInterceptor(builder, customTextureIds, flippedAtLeastOnceSnapshot);
+				ProgramSamplers.CustomTextureSamplerInterceptor customTextureSamplerInterceptor = resources.customTextureSamplerInterceptor(builder, customTextureIds, flippedAtLeastOnceSnapshot);
 
 				CommonUniforms.addDynamicUniforms(builder, FogMode.OFF);
 				this.customUniforms.assignTo(builder);
-				IrisSamplers.addNoiseSampler(customTextureSamplerInterceptor, noiseTexture);
-				IrisSamplers.addCustomTextures(customTextureSamplerInterceptor, irisCustomTextures);
-
-				IrisSamplers.addShadowSamplers(customTextureSamplerInterceptor, targets, flipped, pipeline.hasFeature(FeatureFlags.SEPARATE_HARDWARE_SAMPLERS));
-				IrisImages.addShadowColorImages(builder, targets, flipped);
-
-				IrisImages.addCustomImages(builder, irisCustomImages);
-				IrisSamplers.addCustomImages(builder, irisCustomImages);
+				resources.installProgramBindings(passDescription, ShaderPackPipelineResources.ProgramBindingContext
+					.builder(pipeline, irisCustomTextures, noiseTexture)
+					.samplers(customTextureSamplerInterceptor)
+					.customImageSamplers(builder)
+					.images(builder)
+					.flipped(() -> flipped)
+					.shadowFlipped(flipped)
+					.shadowPass(true)
+					.separateHardwareSamplers(pipeline.hasFeature(FeatureFlags.SEPARATE_HARDWARE_SAMPLERS))
+					.build());
 				programs[i] = builder.buildCompute();
 
 				this.customUniforms.mapholderToPass(builder, programs[i]);
 
 
-				programs[i].setWorkGroupInfo(source.getWorkGroupRelative(), source.getWorkGroups(), FilledIndirectPointer.basedOff(holder, source.getIndirectPointer()));
+				programs[i].setWorkGroupInfo(source.getWorkGroupRelative(), source.getWorkGroups(), resources.resolveIndirectPointer(source.getIndirectPointer()));
 			}
 		}
 
@@ -431,7 +432,7 @@ public class ShadowCompositeRenderer {
 		ImmutableSet<Integer> mipmappedBuffers;
 		ViewportData viewportScale;
 		ComputeProgram[] computes;
-		String derivedFramebufferKey;
+		DerivedFramebufferKey derivedFramebufferKey;
 
 		protected void destroy() {
 			this.program.destroy();

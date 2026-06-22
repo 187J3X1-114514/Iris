@@ -20,16 +20,13 @@ import net.irisshaders.iris.gl.GLDebug;
 import net.irisshaders.iris.gl.IrisRenderSystem;
 import net.irisshaders.iris.gl.blending.BlendModeOverride;
 import net.irisshaders.iris.gl.blending.BlendModeStorage;
-import net.irisshaders.iris.gl.buffer.ShaderStorageBufferHolder;
 import net.irisshaders.iris.gl.framebuffer.GlFramebuffer;
 import net.irisshaders.iris.gl.framebuffer.ViewportData;
-import net.irisshaders.iris.gl.image.GlImage;
 import net.irisshaders.iris.gl.program.ComputeProgram;
 import net.irisshaders.iris.gl.program.Program;
 import net.irisshaders.iris.gl.program.ProgramBuilder;
 import net.irisshaders.iris.gl.program.ProgramSamplers;
 import net.irisshaders.iris.gl.program.ProgramUniforms;
-import net.irisshaders.iris.gl.sampler.GlSampler;
 import net.irisshaders.iris.gl.sampler.SamplerLimits;
 import net.irisshaders.iris.gl.shader.ShaderCompileException;
 import net.irisshaders.iris.gl.state.FogMode;
@@ -42,19 +39,18 @@ import net.irisshaders.iris.pipeline.description.ShaderPackPass;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassLayout;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassStage;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
+import net.irisshaders.iris.pipeline.description.ShaderPackPipelineResources;
 import net.irisshaders.iris.pipeline.description.ShaderPackProgramDescriptor;
 import net.irisshaders.iris.pipeline.description.ShaderPackResourceView;
 import net.irisshaders.iris.pipeline.description.ShaderPackRuntimePassSnapshot;
+import net.irisshaders.iris.pipeline.description.DerivedFramebufferKey;
 import net.irisshaders.iris.pipeline.transform.PatchShaderType;
 import net.irisshaders.iris.pipeline.transform.ShaderPrinter;
 import net.irisshaders.iris.pipeline.transform.TransformPatcher;
-import net.irisshaders.iris.samplers.IrisImages;
 import net.irisshaders.iris.samplers.IrisSamplers;
-import net.irisshaders.iris.shaderpack.FilledIndirectPointer;
 import net.irisshaders.iris.shaderpack.programs.ComputeSource;
 import net.irisshaders.iris.shaderpack.programs.ProgramSource;
 import net.irisshaders.iris.shaderpack.texture.TextureStage;
-import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import net.irisshaders.iris.targets.RenderTarget;
 import net.irisshaders.iris.targets.RenderTargets;
 import net.irisshaders.iris.uniforms.CommonUniforms;
@@ -74,8 +70,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
-import java.util.function.Supplier;
 
 public class CompositeRenderer {
 	public static final RenderPipeline COMPOSITE_PIPELINE = RenderPipeline.builder()
@@ -87,6 +81,7 @@ public class CompositeRenderer {
 		.build();
 
 	private final RenderTargets renderTargets;
+	private final ShaderPackPipelineResources.RuntimeBindings resources;
 
 	private final ImmutableList<Pass> passes;
 	private final TextureAccess noiseTexture;
@@ -95,26 +90,25 @@ public class CompositeRenderer {
 	private final ImmutableSet<Integer> flippedAtLeastOnceFinal;
 	private final CustomUniforms customUniforms;
 	private final Object2ObjectMap<String, TextureAccess> irisCustomTextures;
-	private final Set<GlImage> customImages;
 	private final TextureStage textureStage;
 	private final WorldRenderingPipeline pipeline;
 	private final CompositePass compositePass;
 
-	public CompositeRenderer(WorldRenderingPipeline pipeline, CompositePass compositePass, List<ShaderPackPass> passDescriptions, Map<String, ProgramSource> sourcesByName, Map<String, ComputeSource> computesByName, RenderTargets renderTargets, ShaderStorageBufferHolder holder,
+	public CompositeRenderer(WorldRenderingPipeline pipeline, CompositePass compositePass, List<ShaderPackPass> passDescriptions, Map<String, ProgramSource> sourcesByName, Map<String, ComputeSource> computesByName, RenderTargets renderTargets,
+	                         ShaderPackPipelineResources.RuntimeBindings resources,
 	                         TextureAccess noiseTexture, FrameUpdateNotifier updateNotifier,
-	                         CenterDepthSampler centerDepthSampler,
-	                         Supplier<ShadowRenderTargets> shadowTargetsSupplier, TextureStage textureStage,
-	                         Object2ObjectMap<String, TextureAccess> customTextureIds, Object2ObjectMap<String, TextureAccess> irisCustomTextures, Set<GlImage> customImages,
+	                         CenterDepthSampler centerDepthSampler, TextureStage textureStage,
+	                         Object2ObjectMap<String, TextureAccess> customTextureIds, Object2ObjectMap<String, TextureAccess> irisCustomTextures,
 	                         CustomUniforms customUniforms) {
 		this.pipeline = pipeline;
 		this.compositePass = compositePass;
 		this.noiseTexture = noiseTexture;
 		this.centerDepthSampler = centerDepthSampler;
 		this.renderTargets = renderTargets;
+		this.resources = resources;
 		this.customTextureIds = customTextureIds;
 		this.customUniforms = customUniforms;
 		this.irisCustomTextures = irisCustomTextures;
-		this.customImages = customImages;
 		this.textureStage = textureStage;
 
 		final ImmutableList.Builder<Pass> passes = ImmutableList.builder();
@@ -133,7 +127,7 @@ public class CompositeRenderer {
 				pass.name = passDescription.name();
 				pass.stage = passDescription.stage();
 				pass.type = passDescription.type();
-				pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, shadowTargetsSupplier, holder);
+				pass.computes = createComputes(passDescription, computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot);
 				pass.drawBuffers = layout.drawBuffers().clone();
 				pass.attachmentMapping = Map.copyOf(layout.attachmentMapping());
 				pass.explicitPreFlips = Map.copyOf(layout.explicitPreFlips());
@@ -155,12 +149,12 @@ public class CompositeRenderer {
 			pass.name = passDescription.name();
 			pass.stage = passDescription.stage();
 			pass.type = passDescription.type();
-			pass.program = createProgram(source, stageReadsFromAlt, flippedAtLeastOnceSnapshot, shadowTargetsSupplier);
+			pass.program = createProgram(passDescription, source, stageReadsFromAlt, flippedAtLeastOnceSnapshot);
 			pass.blendModeOverride = passDescription.behavior().blendModeOverride();
-			pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, shadowTargetsSupplier, holder);
+			pass.computes = createComputes(passDescription, computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot);
 			int[] drawBuffers = layout.drawBuffers().clone();
 			int passWidth = 0, passHeight = 0;
-			GlFramebuffer framebuffer = renderTargets.createColorFramebuffer(stageReadsFromAlt, drawBuffers);
+			GlFramebuffer framebuffer = resources.createColorFramebuffer(passDescription);
 
 			for (int buffer : drawBuffers) {
 				RenderTarget target = renderTargets.get(buffer);
@@ -283,8 +277,8 @@ public class CompositeRenderer {
 				passWidth = target.getWidth();
 				passHeight = target.getHeight();
 			}
-			renderTargets.destroyFramebuffer(pass.framebuffer);
-			pass.framebuffer = renderTargets.createColorFramebuffer(pass.stageReadsFromAlt, pass.drawBuffers);
+			resources.destroyMainFramebuffer(pass.framebuffer);
+			pass.framebuffer = resources.createColorFramebuffer(pass.derivedFramebufferKey, pass.stageReadsFromAlt, pass.drawBuffers);
 			pass.viewWidth = passWidth;
 			pass.viewHeight = passHeight;
 		}
@@ -383,8 +377,7 @@ public class CompositeRenderer {
 	}
 
 	// TODO: Don't just copy this from DeferredWorldRenderingPipeline
-	private Program createProgram(ProgramSource source, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot,
-	                              Supplier<ShadowRenderTargets> shadowTargetsSupplier) {
+	private Program createProgram(ShaderPackPass passDescription, ProgramSource source, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot) {
 		// TODO: Properly handle empty shaders
 		Map<PatchShaderType, String> transformed = TransformPatcher.patchComposite(
 			source.getName(),
@@ -414,25 +407,18 @@ public class CompositeRenderer {
 		CommonUniforms.addDynamicUniforms(builder, FogMode.OFF);
 		this.customUniforms.assignTo(builder);
 
-		ProgramSamplers.CustomTextureSamplerInterceptor customTextureSamplerInterceptor = ProgramSamplers.customTextureSamplerInterceptor(builder, customTextureIds, flippedAtLeastOnceSnapshot);
+		ProgramSamplers.CustomTextureSamplerInterceptor customTextureSamplerInterceptor = resources.customTextureSamplerInterceptor(builder, customTextureIds, flippedAtLeastOnceSnapshot);
 
-		IrisSamplers.addRenderTargetSamplers(customTextureSamplerInterceptor, () -> flipped, renderTargets, true, pipeline);
-		IrisSamplers.addCustomTextures(builder, irisCustomTextures);
-		IrisSamplers.addCustomImages(customTextureSamplerInterceptor, customImages);
-
-		IrisImages.addRenderTargetImages(builder, () -> flipped, renderTargets);
-		IrisImages.addCustomImages(builder, customImages);
-
-		IrisSamplers.addNoiseSampler(customTextureSamplerInterceptor, noiseTexture);
-		IrisSamplers.addCompositeSamplers(customTextureSamplerInterceptor, renderTargets);
-
-		if (IrisSamplers.hasShadowSamplers(customTextureSamplerInterceptor)) {
-			IrisSamplers.addShadowSamplers(customTextureSamplerInterceptor, shadowTargetsSupplier.get(), null, pipeline.hasFeature(FeatureFlags.SEPARATE_HARDWARE_SAMPLERS));
-			IrisImages.addShadowColorImages(builder, shadowTargetsSupplier.get(), null);
-		}
-
-		// TODO: Don't duplicate this with FinalPassRenderer
-		centerDepthSampler.setUsage(builder.addDynamicSampler(centerDepthSampler::getCenterDepthTexture, GlSampler.NEAREST, "iris_centerDepthSmooth"));
+		resources.installProgramBindings(passDescription, ShaderPackPipelineResources.ProgramBindingContext
+			.builder(pipeline, irisCustomTextures, noiseTexture)
+			.samplers(customTextureSamplerInterceptor)
+			.directSamplers(builder)
+			.images(builder)
+			.flipped(() -> flipped)
+			.fullscreenPass(true)
+			.separateHardwareSamplers(pipeline.hasFeature(FeatureFlags.SEPARATE_HARDWARE_SAMPLERS))
+			.centerDepthSampler(centerDepthSampler)
+			.build());
 
 		Program build = builder.build();
 
@@ -443,7 +429,7 @@ public class CompositeRenderer {
 		return build;
 	}
 
-	private ComputeProgram[] createComputes(ComputeSource[] compute, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot, Supplier<ShadowRenderTargets> shadowTargetsSupplier, ShaderStorageBufferHolder holder) {
+	private ComputeProgram[] createComputes(ShaderPackPass passDescription, ComputeSource[] compute, ImmutableSet<Integer> flipped, ImmutableSet<Integer> flippedAtLeastOnceSnapshot) {
 		ComputeProgram[] programs = new ComputeProgram[compute.length];
 		for (int i = 0; i < programs.length; i++) {
 			ComputeSource source = compute[i];
@@ -466,35 +452,28 @@ public class CompositeRenderer {
 					throw new RuntimeException("Shader compilation failed for compute " + source.getName() + "!", e);
 				}
 
-				ProgramSamplers.CustomTextureSamplerInterceptor customTextureSamplerInterceptor = ProgramSamplers.customTextureSamplerInterceptor(builder, customTextureIds, flippedAtLeastOnceSnapshot);
+				ProgramSamplers.CustomTextureSamplerInterceptor customTextureSamplerInterceptor = resources.customTextureSamplerInterceptor(builder, customTextureIds, flippedAtLeastOnceSnapshot);
 
 				CommonUniforms.addDynamicUniforms(builder, FogMode.OFF);
 
 				customUniforms.assignTo(builder);
 
-				IrisSamplers.addRenderTargetSamplers(customTextureSamplerInterceptor, () -> flipped, renderTargets, true, pipeline);
-				IrisSamplers.addCustomTextures(builder, irisCustomTextures);
-				IrisSamplers.addCustomImages(customTextureSamplerInterceptor, customImages);
-
-				IrisImages.addRenderTargetImages(builder, () -> flipped, renderTargets);
-				IrisImages.addCustomImages(builder, customImages);
-
-				IrisSamplers.addNoiseSampler(customTextureSamplerInterceptor, noiseTexture);
-				IrisSamplers.addCompositeSamplers(customTextureSamplerInterceptor, renderTargets);
-
-				if (IrisSamplers.hasShadowSamplers(customTextureSamplerInterceptor)) {
-					IrisSamplers.addShadowSamplers(customTextureSamplerInterceptor, shadowTargetsSupplier.get(), null, pipeline.hasFeature(FeatureFlags.SEPARATE_HARDWARE_SAMPLERS));
-					IrisImages.addShadowColorImages(builder, shadowTargetsSupplier.get(), null);
-				}
-
-				// TODO: Don't duplicate this with FinalPassRenderer
-				centerDepthSampler.setUsage(builder.addDynamicSampler(centerDepthSampler::getCenterDepthTexture, GlSampler.NEAREST, "iris_centerDepthSmooth"));
+				resources.installProgramBindings(passDescription, ShaderPackPipelineResources.ProgramBindingContext
+					.builder(pipeline, irisCustomTextures, noiseTexture)
+					.samplers(customTextureSamplerInterceptor)
+					.directSamplers(builder)
+					.images(builder)
+					.flipped(() -> flipped)
+					.fullscreenPass(true)
+					.separateHardwareSamplers(pipeline.hasFeature(FeatureFlags.SEPARATE_HARDWARE_SAMPLERS))
+					.centerDepthSampler(centerDepthSampler)
+					.build());
 
 				programs[i] = builder.buildCompute();
 
 				customUniforms.mapholderToPass(builder, programs[i]);
 
-				programs[i].setWorkGroupInfo(source.getWorkGroupRelative(), source.getWorkGroups(), FilledIndirectPointer.basedOff(holder, source.getIndirectPointer()));
+				programs[i].setWorkGroupInfo(source.getWorkGroupRelative(), source.getWorkGroups(), resources.resolveIndirectPointer(source.getIndirectPointer()));
 			}
 		}
 
@@ -528,7 +507,7 @@ public class CompositeRenderer {
 		ImmutableSet<Integer> stageReadsFromAlt;
 		ImmutableSet<Integer> mipmappedBuffers;
 		ViewportData viewportScale;
-		String derivedFramebufferKey;
+		DerivedFramebufferKey derivedFramebufferKey;
 
 		protected void destroy() {
 			this.program.destroy();

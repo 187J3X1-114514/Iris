@@ -6,10 +6,10 @@ import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntList;
 import net.irisshaders.iris.pipeline.description.ShaderPackPass;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
+import net.irisshaders.iris.pipeline.description.ShaderPackPipelineResources;
 import net.irisshaders.iris.pipeline.description.ShaderPackResourceView;
 import net.irisshaders.iris.shaderpack.properties.PackRenderTargetDirectives;
 import net.irisshaders.iris.shaderpack.properties.PackShadowDirectives;
-import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import org.joml.Vector2i;
 import org.joml.Vector4f;
 import org.lwjgl.opengl.GL21C;
@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 public class ClearPassCreator {
-	public static ImmutableList<ClearPass> createClearPasses(List<ShaderPackPass> descriptors, RenderTargets renderTargets, boolean fullClear,
+	public static ImmutableList<ClearPass> createClearPasses(List<ShaderPackPass> descriptors, ShaderPackPipelineResources.RuntimeBindings resources, boolean fullClear,
 															 PackRenderTargetDirectives renderTargetDirectives) {
 		final int maxDrawBuffers = GlStateManager._getInteger(GL21C.GL_MAX_DRAW_BUFFERS);
 
@@ -56,7 +56,7 @@ public class ClearPassCreator {
 				defaultClearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
 			}
 
-			RenderTarget target = renderTargets.get(buffer);
+			RenderTarget target = resources.renderTarget(buffer);
 			if (target == null) continue;
 			Vector4f clearColor = settings.getClearColor().orElse(defaultClearColor);
 			boolean alt = clearsAlt(descriptor);
@@ -80,19 +80,15 @@ public class ClearPassCreator {
 				}
 
 				clearPasses.add(new ClearPass(clearInfo.getColor(), clearInfo::getWidth, clearInfo::getHeight,
-					renderTargets.createClearFramebuffer(alt, clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
+					resources.createClearFramebuffer(alt, clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
 			}
 		})));
 
 		return ImmutableList.copyOf(clearPasses);
 	}
 
-	public static ImmutableList<ClearPass> createShadowClearPasses(List<ShaderPackPass> descriptors, ShadowRenderTargets renderTargets, boolean fullClear,
+	public static ImmutableList<ClearPass> createShadowClearPasses(List<ShaderPackPass> descriptors, ShaderPackPipelineResources.RuntimeBindings resources, boolean fullClear,
 																   PackShadowDirectives renderTargetDirectives) {
-		if (renderTargets == null) {
-			return ImmutableList.of();
-		}
-
 		final int maxDrawBuffers = GlStateManager._getInteger(GL21C.GL_MAX_DRAW_BUFFERS);
 
 		// Sort buffers by their clear color so we can group up glClear calls.
@@ -108,11 +104,11 @@ public class ClearPassCreator {
 			}
 
 			int buffer = descriptor.layout().drawBuffers()[0];
-			if (buffer >= renderTargets.getRenderTargetCount()) {
+			if (buffer >= resources.shadowRenderTargetCount()) {
 				continue;
 			}
 
-			if (renderTargets.get(buffer) != null) {
+			if (resources.shadowRenderTarget(buffer) != null) {
 				PackShadowDirectives.SamplingSettings settings = renderTargetDirectives.getColorSamplingSettings().get(buffer);
 				Vector4f clearColor = settings.getClearColor();
 				boolean alt = clearsAlt(descriptor);
@@ -137,8 +133,8 @@ public class ClearPassCreator {
 					startIndex++;
 				}
 
-				clearPasses.add(new ClearPass(clearColor, renderTargets::getResolution, renderTargets::getResolution,
-					alt ? renderTargets.createFramebufferWritingToAlt(clearBuffers) : renderTargets.createFramebufferWritingToMain(clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
+				clearPasses.add(new ClearPass(clearColor, resources::shadowResolution, resources::shadowResolution,
+					resources.createShadowClearFramebuffer(alt, clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
 			}
 		}));
 

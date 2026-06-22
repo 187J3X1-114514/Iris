@@ -85,7 +85,7 @@ public final class ShaderPackPipelineDebugDump {
 		out.append("  layout.explicitFlips=").append(sortedMap(layout.explicitFlips())).append('\n');
 		out.append("  layout.resolvedFlips=").append(sorted(layout.resolvedFlips())).append('\n');
 		out.append("  layout.flippedAtLeastOnceSnapshot=").append(sorted(layout.flippedAtLeastOnceSnapshot())).append('\n');
-		out.append("  layout.derivedFramebufferKey=").append(layout.derivedFramebufferKey()).append('\n');
+		out.append("  layout.derivedFramebufferKey=").append(layout.derivedFramebufferKey().debugName()).append('\n');
 	}
 
 	private static void appendResources(StringBuilder out, ShaderPackPipelineResources resources) {
@@ -96,11 +96,17 @@ public final class ShaderPackPipelineDebugDump {
 		out.append("- logicalImages=").append(resources.logicalImages()).append('\n');
 		out.append("- logicalSsbo=").append(resources.logicalSsbo()).append('\n');
 		out.append("- irisCompatibilityResources=").append(resources.irisCompatibilityResources()).append('\n');
-		out.append("- derivedFramebufferKeys=").append(resources.derivedFramebufferKeys()).append('\n');
+		out.append("- debugDerivedFramebufferKeys=").append(resources.debugDerivedFramebufferKeys()).append('\n');
+		out.append("- derivedFramebufferDescriptors=").append(resources.derivedFramebuffers().stream().map(DerivedFramebufferDescriptor::debugSummary).collect(Collectors.toList())).append('\n');
 		out.append("- mainTargetDependencies=").append(resources.mainTargetDependencies()).append('\n');
 		out.append("- resizeInvalidation=").append(resources.resizeInvalidation()).append('\n');
 		out.append("- reloadInvalidation=").append(resources.reloadInvalidation()).append('\n');
 		out.append("- destroyOwnership=").append(resources.destroyOwnership()).append('\n');
+		out.append("- debugRuntimeOwnerQueries=").append(resources.debugRuntimeOwnerQueries()).append('\n');
+		out.append("- debugDerivedRuntimeObjects=").append(resources.debugDerivedRuntimeObjects()).append('\n');
+		out.append("- debugProgramBindingDescriptors=").append(resources.debugProgramBindingDescriptors()).append('\n');
+		out.append("- programBindingDescriptorDefinitions=").append(resources.programBindingDescriptorDefinitions().stream().map(ShaderPackBindingDescriptor::debugSummary).collect(Collectors.toList())).append('\n');
+		out.append("- invalidationReasons=").append(resources.invalidationReasons()).append('\n');
 		out.append('\n');
 	}
 

@@ -1,0 +1,19 @@
+package net.irisshaders.iris.pipeline.description;
+
+public enum DerivedFramebufferKind {
+	COLOR,
+	SHADOW_COLOR,
+	FINAL_FALLBACK,
+	FINAL_RESTORE,
+	CLEAR,
+	SHADOW_CLEAR,
+	MAIN_VIEW,
+	SHADOW_VIEW,
+	GBUFFERS_EXTERNAL_DRAW,
+	DH_GBUFFERS,
+	DH_SHADOW,
+	DEPTH_COPY,
+	IMAGE_CLEAR,
+	MAIN_COLOR_TARGET,
+	COMPUTE_ONLY
+}

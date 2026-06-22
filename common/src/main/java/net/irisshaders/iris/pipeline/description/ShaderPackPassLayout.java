@@ -12,6 +12,6 @@ public record ShaderPackPassLayout(
 	Map<Integer, Boolean> explicitFlips,
 	Set<Integer> resolvedFlips,
 	Set<Integer> flippedAtLeastOnceSnapshot,
-	String derivedFramebufferKey
+	DerivedFramebufferKey derivedFramebufferKey
 ) {
 }

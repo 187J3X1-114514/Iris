@@ -29,13 +29,14 @@ import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 public final class ShaderPackPipelineBuilder {
 	public static final String BUILDER_SCHEMA_VERSION = "phase-3-description-v1";
-	public static final String RESOURCE_SCHEMA_VERSION = "phase-3-resources-v1";
+	public static final String RESOURCE_SCHEMA_VERSION = "phase-4-resources-v1";
 
 	private final ProgramSet programSet;
 	private final PackDirectives packDirectives;
@@ -44,7 +45,7 @@ public final class ShaderPackPipelineBuilder {
 	private final int shadowSize;
 	private final Map<ShaderPackPassStage, List<ShaderPackPass>> stages = new EnumMap<>(ShaderPackPassStage.class);
 	private final LinkedHashSet<Integer> mainFlipped = new LinkedHashSet<>();
-	private final List<String> derivedFramebufferKeys = new ArrayList<>();
+	private final Map<DerivedFramebufferKey, DerivedFramebufferDescriptor> derivedFramebuffers = new LinkedHashMap<>();
 	private Set<Integer> flippedBeforeShadow = Set.of();
 	private Set<Integer> flippedAfterPrepare = Set.of();
 	private Set<Integer> flippedAfterTranslucent = Set.of();
@@ -293,6 +294,7 @@ public final class ShaderPackPipelineBuilder {
 		programSet.get(ProgramId.Final).ifPresentOrElse(source -> {
 			String passId = "final/000/" + source.getName();
 			ProgramDirectives directives = source.getDirectives();
+			DerivedFramebufferKey key = registerDerivedFramebuffer("main-color-target", DerivedFramebufferKind.MAIN_COLOR_TARGET, "Minecraft main target reference", Set.of(), new int[0], passId, "final main color");
 			ShaderPackPassLayout layout = new ShaderPackPassLayout(
 				passId,
 				bufferInputViews(flippedAfterComposite, ShaderPackResourceKind.COLORTEX),
@@ -302,9 +304,8 @@ public final class ShaderPackPipelineBuilder {
 				Map.copyOf(directives.getExplicitFlips()),
 				Set.of(),
 				compositeFlippedAtLeastOnce,
-				"main-color-target"
+				key
 			);
-			derivedFramebufferKeys.add(layout.derivedFramebufferKey());
 
 			stages.get(ShaderPackPassStage.FINAL).add(new ShaderPackPass(
 				passId,
@@ -328,7 +329,7 @@ public final class ShaderPackPipelineBuilder {
 
 			String passId = "final/restore/colortex" + buffer;
 			ShaderPackPassLayout layout = layoutFor(passId, ShaderPackPassStage.FINAL, new int[]{buffer}, Set.of(buffer), Map.of(), Map.of(), Set.of(), compositeFlippedAtLeastOnce,
-				"restore-copy:colortex" + buffer + ".alt-to-main");
+				derivedFramebufferKey(DerivedFramebufferKind.FINAL_RESTORE, ShaderPackPassStage.FINAL, "restore-copy", Set.of(buffer), new int[]{buffer}, passId));
 			stages.get(ShaderPackPassStage.FINAL).add(new ShaderPackPass(
 				passId,
 				"restore colortex" + buffer,
@@ -347,7 +348,7 @@ public final class ShaderPackPipelineBuilder {
 	private void addFinalFallbackCopy() {
 		String passId = "final/fallback-copy/colortex0-to-main";
 		ShaderPackPassLayout layout = layoutFor(passId, ShaderPackPassStage.FINAL, new int[]{0}, flippedAfterComposite, Map.of(), Map.of(), Set.of(),
-			compositeFlippedAtLeastOnce, "final-baseline:colortex0-to-main");
+			compositeFlippedAtLeastOnce, derivedFramebufferKey(DerivedFramebufferKind.FINAL_FALLBACK, ShaderPackPassStage.FINAL, "final-baseline", flippedAfterComposite, new int[]{0}, passId));
 		stages.get(ShaderPackPassStage.FINAL).add(new ShaderPackPass(
 			passId,
 			"fallback copy colortex0",
@@ -368,8 +369,8 @@ public final class ShaderPackPipelineBuilder {
 	}
 
 	private void addDepthCopyPass(String passId, String output, String trigger) {
-		ShaderPackPassLayout layout = new ShaderPackPassLayout(passId, Map.of(), new int[0], Map.of(), Map.of(), Map.of(), Set.of(), Set.of(), "depth-copy:" + output);
-		derivedFramebufferKeys.add(layout.derivedFramebufferKey());
+		DerivedFramebufferKey key = registerDerivedFramebuffer("depth-copy-" + output, DerivedFramebufferKind.DEPTH_COPY, "RenderTargets", Set.of(), new int[0], passId, "depth-copy:" + output);
+		ShaderPackPassLayout layout = new ShaderPackPassLayout(passId, Map.of(), new int[0], Map.of(), Map.of(), Map.of(), Set.of(), Set.of(), key);
 		stages.get(ShaderPackPassStage.GBUFFERS).add(new ShaderPackPass(
 			passId,
 			output + " copy",
@@ -391,8 +392,8 @@ public final class ShaderPackPipelineBuilder {
 			}
 
 			String passId = "setup/clear/image/" + image.name();
-			ShaderPackPassLayout layout = new ShaderPackPassLayout(passId, Map.of(), new int[0], Map.of(), Map.of(), Map.of(), Set.of(), Set.of(), "image-clear:" + image.name());
-			derivedFramebufferKeys.add(layout.derivedFramebufferKey());
+			DerivedFramebufferKey key = registerDerivedFramebuffer("image-clear-" + image.name(), DerivedFramebufferKind.IMAGE_CLEAR, "custom image set", Set.of(), new int[0], passId, "image-clear:" + image.name());
+			ShaderPackPassLayout layout = new ShaderPackPassLayout(passId, Map.of(), new int[0], Map.of(), Map.of(), Map.of(), Set.of(), Set.of(), key);
 			stages.get(ShaderPackPassStage.SETUP).add(new ShaderPackPass(
 				passId,
 				"clear image " + image.name(),
@@ -424,8 +425,9 @@ public final class ShaderPackPipelineBuilder {
 
 	private void addClearDescriptor(ShaderPackPassStage stage, String clearClass, int buffer, ShaderPackResourceView view, String format, String trigger) {
 		String passId = stage.name().toLowerCase() + "/clear/" + clearClass + "/colortex" + buffer + "." + view.name().toLowerCase();
+		DerivedFramebufferKey key = derivedFramebufferKey(DerivedFramebufferKind.CLEAR, stage, "clear-" + clearClass + "-" + view.name().toLowerCase(), view == ShaderPackResourceView.MAIN ? Set.of(buffer) : Set.of(), new int[]{buffer}, passId);
 		ShaderPackPassLayout layout = layoutFor(passId, stage, new int[]{buffer}, view == ShaderPackResourceView.MAIN ? Set.of(buffer) : Set.of(),
-			Map.of(), Map.of(), Set.of(), Set.of(), "clear:" + clearClass + ":colortex" + buffer + "." + view.name().toLowerCase());
+			Map.of(), Map.of(), Set.of(), Set.of(), key);
 		stages.get(stage).add(new ShaderPackPass(
 			passId,
 			"clear colortex" + buffer + " " + view.name().toLowerCase(),
@@ -455,8 +457,9 @@ public final class ShaderPackPipelineBuilder {
 
 	private void addShadowClearDescriptor(String clearClass, int buffer, ShaderPackResourceView view, String format, String trigger) {
 		String passId = "shadow/clear/" + clearClass + "/shadowcolor" + buffer + "." + view.name().toLowerCase();
+		DerivedFramebufferKey key = derivedFramebufferKey(DerivedFramebufferKind.SHADOW_CLEAR, ShaderPackPassStage.SHADOW, "shadow-clear-" + clearClass + "-" + view.name().toLowerCase(), view == ShaderPackResourceView.MAIN ? Set.of(buffer) : Set.of(), new int[]{buffer}, passId);
 		ShaderPackPassLayout layout = layoutFor(passId, ShaderPackPassStage.SHADOW, new int[]{buffer}, view == ShaderPackResourceView.MAIN ? Set.of(buffer) : Set.of(),
-			Map.of(), Map.of(), Set.of(), Set.of(), "shadow-clear:" + clearClass + ":shadowcolor" + buffer + "." + view.name().toLowerCase());
+			Map.of(), Map.of(), Set.of(), Set.of(), key);
 		stages.get(ShaderPackPassStage.SHADOW).add(new ShaderPackPass(
 			passId,
 			"clear shadowcolor" + buffer + " " + view.name().toLowerCase(),
@@ -479,7 +482,8 @@ public final class ShaderPackPipelineBuilder {
 			}
 
 			String passId = stage.name().toLowerCase() + "/" + idPrefix + "-compute/" + i + "/" + source.getName();
-			ShaderPackPassLayout layout = new ShaderPackPassLayout(passId, Map.of(), new int[0], Map.of(), Map.of(), Map.of(), Set.of(), Set.of(), "compute-only");
+			DerivedFramebufferKey key = registerDerivedFramebuffer("compute-only-" + passId, DerivedFramebufferKind.COMPUTE_ONLY, "none", Set.of(), new int[0], passId, "compute-only");
+			ShaderPackPassLayout layout = new ShaderPackPassLayout(passId, Map.of(), new int[0], Map.of(), Map.of(), Map.of(), Set.of(), Set.of(), key);
 			stages.get(stage).add(new ShaderPackPass(
 				passId,
 				source.getName(),
@@ -499,6 +503,7 @@ public final class ShaderPackPipelineBuilder {
 	                                Set<Integer> flippedSnapshot, Set<Integer> flippedAtLeastOnceSnapshot, Map<Integer, Boolean> explicitPreFlips) {
 		String name = firstComputeName(computeSources);
 		String passId = stage.name().toLowerCase() + "/compute-only/" + idPrefix + "/" + name;
+		DerivedFramebufferKey key = registerDerivedFramebuffer("compute-only-" + passId, DerivedFramebufferKind.COMPUTE_ONLY, "none", Set.of(), new int[0], passId, "compute-only");
 		ShaderPackPassLayout layout = new ShaderPackPassLayout(
 			passId,
 			bufferInputViews(flippedSnapshot, stage == ShaderPackPassStage.SHADOW_COMPOSITE ? ShaderPackResourceKind.SHADOWCOLOR : ShaderPackResourceKind.COLORTEX),
@@ -508,7 +513,7 @@ public final class ShaderPackPipelineBuilder {
 			Map.of(),
 			Set.of(),
 			flippedAtLeastOnceSnapshot,
-			"compute-only"
+			key
 		);
 		stages.get(stage).add(new ShaderPackPass(
 			passId,
@@ -526,7 +531,8 @@ public final class ShaderPackPipelineBuilder {
 
 	private ShaderPackPass toExternalDrawPass(ExternalDrawPhasePass external) {
 		String passId = external.id();
-		ShaderPackPassLayout layout = new ShaderPackPassLayout(passId, Map.of(), new int[0], Map.of(), Map.of(), Map.of(), Set.of(), Set.of(), "external-draw:" + external.worldPhase().name());
+		DerivedFramebufferKey key = registerDerivedFramebuffer("external-draw-" + external.worldPhase().name(), DerivedFramebufferKind.GBUFFERS_EXTERNAL_DRAW, "RenderTargets", Set.of(), new int[0], passId, "external-draw:" + external.worldPhase().name());
+		ShaderPackPassLayout layout = new ShaderPackPassLayout(passId, Map.of(), new int[0], Map.of(), Map.of(), Map.of(), Set.of(), Set.of(), key);
 		return new ShaderPackPass(
 			passId,
 			external.worldPhase().name().toLowerCase(),
@@ -535,7 +541,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(),
 			List.of(),
 			List.of(),
-			emptyBindingDescriptor(passId),
+			bindingDescriptor(ShaderPackPassStage.GBUFFERS, TextureStage.GBUFFERS_AND_SHADOW),
 			behavior("runtime", null, ViewportData.defaultValue(), Set.of(), false, "minecraft-or-sodium-draw"),
 			layout
 		);
@@ -681,6 +687,38 @@ public final class ShaderPackPipelineBuilder {
 			"main-target-bridge"
 		);
 
+		List<String> runtimeOwnerQueries = List.of(
+			"colortex*/depthtex* -> RenderTargets",
+			"shadowcolor*/shadowtex* -> ShadowRenderTargets",
+			"custom image name -> custom image set",
+			"ssbo index -> ShaderStorageBufferHolder",
+			"mainColor/mainDepth -> Minecraft main target reference",
+			"derived framebuffer key -> resources RuntimeBindings"
+		);
+
+		List<String> derivedRuntimeObjects = List.of(
+			"color framebuffer",
+			"shadow color framebuffer",
+			"gbuffers framebuffer",
+			"clear framebuffer group",
+			"shadow clear framebuffer group",
+			"final baseline copy framebuffer",
+			"final restore copy framebuffer",
+			"main color holder framebuffer",
+			"image clear runtime pass"
+		);
+
+		List<ShaderPackBindingDescriptor> bindingDescriptorDefinitions = stages.values().stream()
+			.flatMap(List::stream)
+			.map(ShaderPackPass::bindings)
+			.distinct()
+			.sorted((a, b) -> a.descriptorId().compareTo(b.descriptorId()))
+			.collect(Collectors.toList());
+		List<String> bindingDescriptors = bindingDescriptorDefinitions.stream()
+			.map(this::resourcesBindingPlanId)
+			.sorted()
+			.collect(Collectors.toList());
+
 		return new ShaderPackPipelineResources(
 			List.copyOf(logicalRenderTargets),
 			List.copyOf(logicalShadowTargets),
@@ -688,12 +726,20 @@ public final class ShaderPackPipelineBuilder {
 			List.copyOf(logicalImages),
 			List.copyOf(logicalSsbo),
 			compatibility,
-			List.copyOf(new LinkedHashSet<>(derivedFramebufferKeys)),
+			List.copyOf(derivedFramebuffers.values()),
 			List.of("main-color-texture-version", "main-depth-texture-version", "main-depth-format"),
 			List.of("renderTargets", "shadowTargets", "relativeCustomImages", "relativeSSBO", "derivedFramebuffers", "finalHolder", "copyHolders", "setupCompute"),
 			List.of("programDescriptors", "bindings", "renderTargets", "customImages", "ssbo", "derivedFramebuffers", "setupCompute"),
-			List.of("runtime owners destroy GL objects", "IrisRenderingPipeline orders destroy", "resources describe dependency graph")
+			List.of("RenderTargets destroy color/depth framebuffers", "ShadowRenderTargets destroy shadow framebuffers", "custom image owner destroys GlImage", "ShaderStorageBufferHolder destroys SSBO", "program owners destroy programs", "IrisRenderingPipeline orders destroy", "resources describe dependency graph"),
+			runtimeOwnerQueries,
+			derivedRuntimeObjects,
+			bindingDescriptors,
+			bindingDescriptorDefinitions
 		);
+	}
+
+	private String resourcesBindingPlanId(ShaderPackBindingDescriptor descriptor) {
+		return descriptor.debugSummary();
 	}
 
 	private String imageSummary(ImageInformation image) {
@@ -714,9 +760,9 @@ public final class ShaderPackPipelineBuilder {
 
 	private ShaderPackPassLayout layoutFor(String passId, ShaderPackPassStage stage, int[] drawBuffers, Set<Integer> stageWritesToMain,
 	                                       Map<Integer, Boolean> explicitPreFlips, Map<Integer, Boolean> explicitFlips, Set<Integer> resolvedFlips,
-	                                       Set<Integer> flippedAtLeastOnceSnapshot, String derivedFramebufferKey) {
+	                                       Set<Integer> flippedAtLeastOnceSnapshot, DerivedFramebufferKey derivedFramebufferKey) {
 		ShaderPackResourceKind kind = stage == ShaderPackPassStage.SHADOW_COMPOSITE || stage == ShaderPackPassStage.SHADOW ? ShaderPackResourceKind.SHADOWCOLOR : ShaderPackResourceKind.COLORTEX;
-		ShaderPackPassLayout layout = new ShaderPackPassLayout(
+		return new ShaderPackPassLayout(
 			passId,
 			bufferInputViews(stageWritesToMain, kind),
 			drawBuffers.clone(),
@@ -727,8 +773,6 @@ public final class ShaderPackPipelineBuilder {
 			Set.copyOf(flippedAtLeastOnceSnapshot),
 			derivedFramebufferKey
 		);
-		derivedFramebufferKeys.add(derivedFramebufferKey);
-		return layout;
 	}
 
 	private Map<String, ShaderPackResourceView> bufferInputViews(Set<Integer> flipped, ShaderPackResourceKind kind) {
@@ -761,9 +805,20 @@ public final class ShaderPackPipelineBuilder {
 		return Collections.unmodifiableMap(mapping);
 	}
 
-	private String derivedFramebufferKey(ShaderPackPassStage stage, String kind, Set<Integer> stageWritesToMain, int[] drawBuffers) {
-		String key = kind + ":stage=" + stage.name() + ":writeMain=" + sorted(stageWritesToMain) + ":drawBuffers=" + Arrays.toString(drawBuffers);
-		derivedFramebufferKeys.add(key);
+	private DerivedFramebufferKey derivedFramebufferKey(ShaderPackPassStage stage, String kind, Set<Integer> stageWritesToMain, int[] drawBuffers) {
+		DerivedFramebufferKind framebufferKind = kind.equals("shadow-color") ? DerivedFramebufferKind.SHADOW_COLOR : DerivedFramebufferKind.COLOR;
+		return derivedFramebufferKey(framebufferKind, stage, kind, stageWritesToMain, drawBuffers, stage.name().toLowerCase(Locale.ROOT));
+	}
+
+	private DerivedFramebufferKey derivedFramebufferKey(DerivedFramebufferKind kind, ShaderPackPassStage stage, String debugKind, Set<Integer> writesToMain, int[] drawBuffers, String source) {
+		String key = debugKind + "-stage-" + stage.name() + "-writeMain-" + sorted(writesToMain) + "-drawBuffers-" + Arrays.toString(drawBuffers);
+		String owner = kind == DerivedFramebufferKind.SHADOW_COLOR ? "ShadowRenderTargets" : "RenderTargets";
+		return registerDerivedFramebuffer(key, kind, owner, writesToMain, drawBuffers, source, debugKind);
+	}
+
+	private DerivedFramebufferKey registerDerivedFramebuffer(String id, DerivedFramebufferKind kind, String owner, Set<Integer> writesToMain, int[] drawBuffers, String source, String debugLabel) {
+		DerivedFramebufferKey key = DerivedFramebufferKey.of(id);
+		derivedFramebuffers.putIfAbsent(key, new DerivedFramebufferDescriptor(key, kind, owner, writesToMain, drawBuffers, source, debugLabel));
 		return key;
 	}
 
@@ -822,25 +877,62 @@ public final class ShaderPackPipelineBuilder {
 	}
 
 	private ShaderPackBindingDescriptor bindingDescriptor(ShaderPackPassStage stage, TextureStage textureStage) {
-		String id = "bindings:" + stage.name().toLowerCase() + ":" + textureStage.name().toLowerCase();
-		List<String> samplers = new ArrayList<>(List.of("render-target-samplers", "custom-textures", "custom-images", "noise"));
-		List<String> images = new ArrayList<>(List.of("render-target-images", "custom-images"));
-		if (stage == ShaderPackPassStage.SHADOW || stage == ShaderPackPassStage.SHADOW_COMPOSITE) {
-			samplers.add("shadow-samplers");
-			images.add("shadow-color-images");
+		String id = ShaderPackPipelineResources.bindingDescriptorId(stage, textureStage);
+
+		List<SamplerBindingDirective> samplers = new ArrayList<>();
+		List<ImageBindingDirective> images = new ArrayList<>();
+		List<CompatibilityResourceDirective> compatibility = new ArrayList<>(List.of(compatibility(CompatibilityResourceKind.NOISE_TEXTURE)));
+
+		switch (stage) {
+			case SETUP -> {
+				samplers.addAll(samplers(SamplerBindingKind.RENDER_TARGETS, SamplerBindingKind.CUSTOM_TEXTURES, SamplerBindingKind.CUSTOM_IMAGES, SamplerBindingKind.NOISE, SamplerBindingKind.COMPOSITE_DEPTH, SamplerBindingKind.SHADOW_IF_PRESENT));
+				images.addAll(images(ImageBindingKind.RENDER_TARGETS, ImageBindingKind.CUSTOM_IMAGES, ImageBindingKind.SHADOW_COLOR_IF_SAMPLER_PRESENT));
+			}
+			case SHADOW -> {
+				samplers.addAll(samplers(SamplerBindingKind.RENDER_TARGETS, SamplerBindingKind.CUSTOM_TEXTURES, SamplerBindingKind.CUSTOM_IMAGES, SamplerBindingKind.LEVEL, SamplerBindingKind.NOISE, SamplerBindingKind.SHADOW_IF_PRESENT));
+				images.addAll(images(ImageBindingKind.RENDER_TARGETS, ImageBindingKind.CUSTOM_IMAGES, ImageBindingKind.SHADOW_COLOR_IF_SAMPLER_PRESENT));
+				compatibility.add(compatibility(CompatibilityResourceKind.WHITE_PIXEL));
+			}
+			case SHADOW_COMPOSITE -> {
+				samplers.addAll(samplers(SamplerBindingKind.NOISE, SamplerBindingKind.CUSTOM_TEXTURES_INTERCEPTED, SamplerBindingKind.SHADOW, SamplerBindingKind.CUSTOM_IMAGES));
+				images.addAll(images(ImageBindingKind.SHADOW_COLOR, ImageBindingKind.CUSTOM_IMAGES));
+			}
+			case GBUFFERS -> {
+				samplers.addAll(samplers(SamplerBindingKind.RENDER_TARGETS, SamplerBindingKind.CUSTOM_TEXTURES_INTERCEPTED, SamplerBindingKind.CUSTOM_IMAGES, SamplerBindingKind.LEVEL, SamplerBindingKind.WORLD_DEPTH, SamplerBindingKind.NOISE, SamplerBindingKind.PBR_DETECTION, SamplerBindingKind.SHADOW_IF_PRESENT));
+				images.addAll(images(ImageBindingKind.RENDER_TARGETS, ImageBindingKind.CUSTOM_IMAGES, ImageBindingKind.SHADOW_COLOR_IF_IMAGE_PRESENT_OR_SHADOW_PASS));
+				compatibility.addAll(List.of(compatibility(CompatibilityResourceKind.WHITE_PIXEL), compatibility(CompatibilityResourceKind.PBR_NORMAL_SPECULAR_SAMPLERS)));
+			}
+			case BEGIN, PREPARE, DEFERRED, COMPOSITE, FINAL -> {
+				samplers.addAll(samplers(SamplerBindingKind.RENDER_TARGETS, SamplerBindingKind.CUSTOM_TEXTURES, SamplerBindingKind.CUSTOM_IMAGES, SamplerBindingKind.NOISE, SamplerBindingKind.COMPOSITE_DEPTH, SamplerBindingKind.SHADOW_IF_PRESENT, SamplerBindingKind.CENTER_DEPTH));
+				images.addAll(images(ImageBindingKind.RENDER_TARGETS, ImageBindingKind.CUSTOM_IMAGES, ImageBindingKind.SHADOW_COLOR_IF_SAMPLER_PRESENT));
+				compatibility.add(compatibility(CompatibilityResourceKind.CENTER_DEPTH_SAMPLER));
+			}
 		}
+
 		return new ShaderPackBindingDescriptor(
 			id,
+			textureStage.name(),
 			List.copyOf(samplers),
 			List.copyOf(images),
-			programSet.getPack().getBufferObjects().isEmpty() ? List.of() : List.of("shader-storage-buffers"),
-			List.of("textureStage=" + textureStage.name()),
-			List.of("white-pixel", "noise-texture", "center-depth")
+			programSet.getPack().getBufferObjects().isEmpty() ? List.of() : List.of(SsboBindingDirective.of(SsboBindingKind.SHADER_STORAGE_BUFFERS)),
+			List.copyOf(compatibility)
 		);
 	}
 
 	private ShaderPackBindingDescriptor emptyBindingDescriptor(String id) {
-		return new ShaderPackBindingDescriptor("bindings:" + id, List.of(), List.of(), List.of(), List.of(), List.of());
+		return new ShaderPackBindingDescriptor("bindings:" + id, "none", List.of(), List.of(), List.of(), List.of());
+	}
+
+	private static List<SamplerBindingDirective> samplers(SamplerBindingKind... kinds) {
+		return Arrays.stream(kinds).map(SamplerBindingDirective::of).toList();
+	}
+
+	private static List<ImageBindingDirective> images(ImageBindingKind... kinds) {
+		return Arrays.stream(kinds).map(ImageBindingDirective::of).toList();
+	}
+
+	private static CompatibilityResourceDirective compatibility(CompatibilityResourceKind kind) {
+		return CompatibilityResourceDirective.of(kind);
 	}
 
 	private ShaderPackPassBehavior behavior(String blend, BlendModeOverride blendModeOverride, ViewportData viewportData, Set<Integer> mipmappedInputs, boolean hasCompute, String trigger) {
