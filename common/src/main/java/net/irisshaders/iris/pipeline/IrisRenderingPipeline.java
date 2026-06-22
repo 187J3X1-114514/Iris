@@ -53,7 +53,10 @@ import net.irisshaders.iris.pbr.texture.PBRTextureHolder;
 import net.irisshaders.iris.pbr.texture.PBRTextureManager;
 import net.irisshaders.iris.pbr.texture.PBRType;
 import net.irisshaders.iris.pipeline.description.ShaderPackPass;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassLayout;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassResource;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassStage;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipeline;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineBuilder;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineDebugDump;
@@ -335,7 +338,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 			shadowTargetsSupplier.get();
 		}
 
-		this.shadowComputes = createShadowComputes(programSet.getShadowCompute(), programSet);
+		this.shadowComputes = createShadowComputes(passesFor(ShaderPackPassStage.SHADOW), computesByName(programSet.getShadowCompute()));
 
 		if (FullScreenQuadRenderer.init() != -1) throw new IllegalStateException("WHY");
 
@@ -364,7 +367,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 			customTextureManager.getNoiseTexture(), updateNotifier, centerDepthSampler, shadowTargetsSupplier, TextureStage.COMPOSITE_AND_FINAL,
 			customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.COMPOSITE_AND_FINAL, Object2ObjectMaps.emptyMap()), customTextureManager.getIrisCustomTextures(), customImages,
 			customUniforms);
-		this.finalPassRenderer = new FinalPassRenderer(this, programSet, renderTargets, customTextureManager.getNoiseTexture(), shaderStorageBufferHolder, updateNotifier, ImmutableSet.copyOf(shaderPackPipelineDescription.flippedAfterComposite()),
+		this.finalPassRenderer = new FinalPassRenderer(this, passesFor(ShaderPackPassStage.FINAL), sourcesByName(programSet.get(ProgramId.Final).map(source -> new ProgramSource[]{source}).orElseGet(() -> new ProgramSource[0])), computesByName(programSet.getFinalCompute()), renderTargets, customTextureManager.getNoiseTexture(), shaderStorageBufferHolder, updateNotifier, ImmutableSet.copyOf(shaderPackPipelineDescription.flippedAfterComposite()),
 			centerDepthSampler, shadowTargetsSupplier,
 			customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.COMPOSITE_AND_FINAL, Object2ObjectMaps.emptyMap()), customTextureManager.getIrisCustomTextures(), customImages,
 			ImmutableSet.copyOf(shaderPackPipelineDescription.compositeFlippedAtLeastOnce()), customUniforms);
@@ -462,8 +465,8 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 				shadowUsesImages = shader2.hasActiveImages();
 			}
 
-			this.shadowClearPasses = ClearPassCreator.createShadowClearPasses(shadowRenderTargets, false, shadowDirectives);
-			this.shadowClearPassesFull = ClearPassCreator.createShadowClearPasses(shadowRenderTargets, true, shadowDirectives);
+			this.shadowClearPasses = ClearPassCreator.createShadowClearPasses(passesFor(ShaderPackPassStage.SHADOW), shadowRenderTargets, false, shadowDirectives);
+			this.shadowClearPassesFull = ClearPassCreator.createShadowClearPasses(passesFor(ShaderPackPassStage.SHADOW), shadowRenderTargets, true, shadowDirectives);
 			this.shadowCompositeRenderer = new ShadowCompositeRenderer(this, passesFor(ShaderPackPassStage.SHADOW_COMPOSITE), sourcesByName(programSet.getComposite(ProgramArrayId.ShadowComposite)), computesByName(programSet.getCompute(ProgramArrayId.ShadowComposite)), ImmutableSet.copyOf(shaderPackPipelineDescription.shadowCompositeFlippedAfter()), this.shadowRenderTargets, this.shaderStorageBufferHolder, customTextureManager.getNoiseTexture(), updateNotifier,
 				customTextureManager.getCustomTextureIdMap(TextureStage.SHADOWCOMP), customImages, customTextureManager.getIrisCustomTextures(), customUniforms);
 
@@ -482,15 +485,15 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 			this.shadowRenderer = null;
 		}
 
-		this.setup = createSetupComputes(programSet.getSetup(), programSet, TextureStage.SETUP);
+		this.setup = createSetupComputes(passesFor(ShaderPackPassStage.SETUP), computesByName(programSet.getSetup()), TextureStage.SETUP);
 
 		// first optimization pass
 		this.customUniforms.optimise();
 		boolean hasRun = false;
 
-		this.clearPassesFull = ClearPassCreator.createClearPasses(renderTargets, true,
+		this.clearPassesFull = ClearPassCreator.createClearPasses(passesFor(ShaderPackPassStage.SETUP), renderTargets, true,
 			programSet.getPackDirectives().getRenderTargetDirectives());
-		this.clearPasses = ClearPassCreator.createClearPasses(renderTargets, false,
+		this.clearPasses = ClearPassCreator.createClearPasses(passesFor(ShaderPackPassStage.SETUP), renderTargets, false,
 			programSet.getPackDirectives().getRenderTargetDirectives());
 
 		for (ComputeProgram program : setup) {
@@ -542,18 +545,18 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 		defaultFB = flippedAfterPrepare.contains(defaultTex) ? renderTargets.createFramebufferWritingToAlt(new int[] { defaultTex }) : renderTargets.createFramebufferWritingToMain(new int[] { defaultTex });
 		defaultFBAlt = flippedAfterTranslucent.contains(defaultTex) ? renderTargets.createFramebufferWritingToAlt(new int[] { defaultTex }) : renderTargets.createFramebufferWritingToMain(new int[] { defaultTex });
 		this.shaderPackPipelineRuntimeDiff = ShaderPackPipelineRuntimeDiff.compare(shaderPackPipelineDescription, snapshotRuntimePipeline());
-		Iris.logger.info("Shaderpack phase 1/2 runtime diff: {}", shaderPackPipelineRuntimeDiff.summary());
+		Iris.logger.info("Shaderpack phase 1/2/3 runtime diff: {}", shaderPackPipelineRuntimeDiff.summary());
 		if (shaderPackPipelineRuntimeDiff.hasDifferences()) {
-			Iris.logger.warn("Shaderpack phase 1/2 runtime diff details:\n{}", shaderPackPipelineRuntimeDiff.dump());
+			Iris.logger.warn("Shaderpack phase 1/2/3 runtime diff details:\n{}", shaderPackPipelineRuntimeDiff.dump());
 		}
 	}
 
-	private ComputeProgram[] createShadowComputes(ComputeSource[] compute, ProgramSet programSet) {
-		ComputeProgram[] programs = new ComputeProgram[compute.length];
+	private ComputeProgram[] createShadowComputes(List<ShaderPackPass> passDescriptions, Map<String, ComputeSource> computesByName) {
+		List<ComputeSource> sources = computeSourcesForPasses(passDescriptions, computesByName, ShaderPackPassType.COMPUTE);
+		ComputeProgram[] programs = new ComputeProgram[sources.size()];
 		for (int i = 0; i < programs.length; i++) {
-			ComputeSource source = compute[i];
-			if (source == null || source.getSource().isEmpty()) {
-			} else {
+			ComputeSource source = sources.get(i);
+			if (source != null && source.getSource().isPresent()) {
 				ProgramBuilder builder;
 
 				try {
@@ -611,12 +614,12 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 		return programs;
 	}
 
-	private ComputeProgram[] createSetupComputes(ComputeSource[] compute, ProgramSet programSet, TextureStage stage) {
-		ComputeProgram[] programs = new ComputeProgram[compute.length];
+	private ComputeProgram[] createSetupComputes(List<ShaderPackPass> passDescriptions, Map<String, ComputeSource> computesByName, TextureStage stage) {
+		List<ComputeSource> sources = computeSourcesForPasses(passDescriptions, computesByName, ShaderPackPassType.SETUP);
+		ComputeProgram[] programs = new ComputeProgram[sources.size()];
 		for (int i = 0; i < programs.length; i++) {
-			ComputeSource source = compute[i];
-			if (source == null || source.getSource().isEmpty()) {
-			} else {
+			ComputeSource source = sources.get(i);
+			if (source != null && source.getSource().isPresent()) {
 				ProgramBuilder builder;
 
 				try {
@@ -671,6 +674,28 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 
 		return programs;
+	}
+
+	private static List<ComputeSource> computeSourcesForPasses(List<ShaderPackPass> passDescriptions, Map<String, ComputeSource> computesByName, ShaderPackPassType type) {
+		ImmutableList.Builder<ComputeSource> sources = ImmutableList.builder();
+
+		for (ShaderPackPass passDescription : passDescriptions) {
+			if (passDescription.type() != type) {
+				continue;
+			}
+
+			passDescription.programDescriptors().stream()
+				.filter(descriptor -> !descriptor.computeSources().isEmpty())
+				.forEach(descriptor -> {
+					ComputeSource source = computesByName.get(descriptor.sourceName());
+					if (source == null) {
+						throw new IllegalStateException("Missing compute source " + descriptor.sourceName() + " for pass " + passDescription.id());
+					}
+					sources.add(source);
+				});
+		}
+
+		return sources.build();
 	}
 
 	private ShaderSupplier createShader(String name, Optional<ProgramSource> source, ShaderKey key, Patch patch) throws IOException {
@@ -904,8 +929,8 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 		if (shadowRenderTargets != null) {
 			if (packDirectives.getShadowDirectives().isShadowEnabled() == OptionalBoolean.FALSE) {
 				if (shadowRenderTargets.isFullClearRequired()) {
-					this.shadowClearPasses = ClearPassCreator.createShadowClearPasses(shadowRenderTargets, false, shadowDirectives);
-					this.shadowClearPassesFull = ClearPassCreator.createShadowClearPasses(shadowRenderTargets, true, shadowDirectives);
+					this.shadowClearPasses = ClearPassCreator.createShadowClearPasses(passesFor(ShaderPackPassStage.SHADOW), shadowRenderTargets, false, shadowDirectives);
+					this.shadowClearPassesFull = ClearPassCreator.createShadowClearPasses(passesFor(ShaderPackPassStage.SHADOW), shadowRenderTargets, true, shadowDirectives);
 					shadowRenderTargets.onFullClear();
 					for (ClearPass clearPass : shadowClearPassesFull) {
 						clearPass.execute(emptyClearColor);
@@ -926,8 +951,8 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 				}
 
 				if (shadowRenderTargets.isFullClearRequired()) {
-					this.shadowClearPasses = ClearPassCreator.createShadowClearPasses(shadowRenderTargets, false, shadowDirectives);
-					this.shadowClearPassesFull = ClearPassCreator.createShadowClearPasses(shadowRenderTargets, true, shadowDirectives);
+					this.shadowClearPasses = ClearPassCreator.createShadowClearPasses(passesFor(ShaderPackPassStage.SHADOW), shadowRenderTargets, false, shadowDirectives);
+					this.shadowClearPassesFull = ClearPassCreator.createShadowClearPasses(passesFor(ShaderPackPassStage.SHADOW), shadowRenderTargets, true, shadowDirectives);
 					passes = shadowClearPassesFull;
 					shadowRenderTargets.onFullClear();
 				} else {
@@ -971,9 +996,9 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 			this.clearPassesFull.forEach(clearPass -> renderTargets.destroyFramebuffer(clearPass.getFramebuffer()));
 			this.clearPasses.forEach(clearPass -> renderTargets.destroyFramebuffer(clearPass.getFramebuffer()));
 
-			this.clearPassesFull = ClearPassCreator.createClearPasses(renderTargets, true,
+			this.clearPassesFull = ClearPassCreator.createClearPasses(passesFor(ShaderPackPassStage.SETUP), renderTargets, true,
 				packDirectives.getRenderTargetDirectives());
-			this.clearPasses = ClearPassCreator.createClearPasses(renderTargets, false,
+			this.clearPasses = ClearPassCreator.createClearPasses(passesFor(ShaderPackPassStage.SETUP), renderTargets, false,
 				packDirectives.getRenderTargetDirectives());
 		}
 
@@ -1051,7 +1076,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 		int describedPasses = shaderPackPipelineDescription.stages().values().stream().mapToInt(java.util.List::size).sum();
 		messages.addLine("[Iris] Shaderpack pipeline description: " + describedPasses + " passes, " + shaderPackPipelineDescription.externalDrawPhases().size() + " external phases");
-		messages.addLine("[Iris] Shaderpack phase 1/2 runtime diff: " + shaderPackPipelineRuntimeDiff.summary());
+		messages.addLine("[Iris] Shaderpack phase 1/2/3 runtime diff: " + shaderPackPipelineRuntimeDiff.summary());
 	}
 
 	@Override
@@ -1214,15 +1239,103 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 	private ShaderPackPipelineRuntimeSnapshot snapshotRuntimePipeline() {
 		Map<ShaderPackPassStage, List<ShaderPackRuntimePassSnapshot>> passesByStage = new EnumMap<>(ShaderPackPassStage.class);
+		passesByStage.put(ShaderPackPassStage.SETUP, snapshotDescriptorBackedStage(ShaderPackPassStage.SETUP, setup, ShaderPackPassType.SETUP, ShaderPackPassType.CLEAR));
 		passesByStage.put(ShaderPackPassStage.BEGIN, beginRenderer.snapshotRuntimePasses());
 		passesByStage.put(ShaderPackPassStage.PREPARE, prepareRenderer.snapshotRuntimePasses());
 		passesByStage.put(ShaderPackPassStage.DEFERRED, deferredRenderer.snapshotRuntimePasses());
 		passesByStage.put(ShaderPackPassStage.COMPOSITE, compositeRenderer.snapshotRuntimePasses());
+		passesByStage.put(ShaderPackPassStage.GBUFFERS, snapshotDescriptorBackedStage(ShaderPackPassStage.GBUFFERS, new ComputeProgram[0], ShaderPackPassType.COPY));
+		passesByStage.put(ShaderPackPassStage.SHADOW, snapshotDescriptorBackedStage(ShaderPackPassStage.SHADOW, shadowComputes, ShaderPackPassType.COMPUTE, ShaderPackPassType.CLEAR));
+		passesByStage.put(ShaderPackPassStage.FINAL, finalPassRenderer.snapshotRuntimePasses());
 		if (shadowCompositeRenderer != null) {
 			passesByStage.put(ShaderPackPassStage.SHADOW_COMPOSITE, shadowCompositeRenderer.snapshotRuntimePasses());
 		}
 
 		return new ShaderPackPipelineRuntimeSnapshot(passesByStage);
+	}
+
+	private List<ShaderPackRuntimePassSnapshot> snapshotDescriptorBackedStage(ShaderPackPassStage stage, ComputeProgram[] computePrograms, ShaderPackPassType... includedTypes) {
+		Set<ShaderPackPassType> included = Set.of(includedTypes);
+		ImmutableList.Builder<ShaderPackRuntimePassSnapshot> snapshots = ImmutableList.builder();
+		int computeIndex = 0;
+
+		for (ShaderPackPass pass : passesFor(stage)) {
+			if (!included.contains(pass.type())) {
+				continue;
+			}
+
+			int computeCount = 0;
+			boolean hasGraphicsProgram = false;
+			if (pass.type() == ShaderPackPassType.SETUP || pass.type() == ShaderPackPassType.COMPUTE) {
+				computeCount = computeIndex < computePrograms.length && computePrograms[computeIndex] != null ? 1 : 0;
+				computeIndex++;
+			}
+
+			snapshots.add(snapshotFromDescriptor(pass, computeCount, hasGraphicsProgram));
+		}
+
+		return snapshots.build();
+	}
+
+	private static ShaderPackRuntimePassSnapshot snapshotFromDescriptor(ShaderPackPass pass, int computeProgramCount, boolean hasGraphicsProgram) {
+		ShaderPackPassLayout layout = pass.layout();
+		return new ShaderPackRuntimePassSnapshot(
+			pass.id(),
+			pass.name(),
+			pass.stage(),
+			pass.type(),
+			layout.drawBuffers(),
+			layout.attachmentMapping(),
+			layout.explicitPreFlips(),
+			layout.explicitFlips(),
+			layout.resolvedFlips(),
+			bufferReadsFromAlt(pass),
+			layout.flippedAtLeastOnceSnapshot(),
+			pass.behavior().mipmappedInputs(),
+			pass.behavior().viewportScale(),
+			pass.behavior().blendModeOverride() != null,
+			computeProgramCount,
+			hasGraphicsProgram,
+			layout.derivedFramebufferKey()
+		);
+	}
+
+	private static Set<Integer> bufferReadsFromAlt(ShaderPackPass pass) {
+		if (pass.type() == ShaderPackPassType.CLEAR) {
+			return Set.of();
+		}
+
+		if (pass.type() == ShaderPackPassType.COPY) {
+			return bufferReadsFromAlt(pass.inputs(), pass.stage());
+		}
+
+		String prefix = bufferPrefix(pass.stage());
+		ImmutableSet.Builder<Integer> readsAlt = ImmutableSet.builder();
+
+		pass.layout().bufferInputViews().forEach((resource, view) -> {
+			if (view == net.irisshaders.iris.pipeline.description.ShaderPackResourceView.ALT && resource.startsWith(prefix)) {
+				readsAlt.add(Integer.parseInt(resource.substring(prefix.length())));
+			}
+		});
+
+		return readsAlt.build();
+	}
+
+	private static Set<Integer> bufferReadsFromAlt(List<ShaderPackPassResource> resources, ShaderPackPassStage stage) {
+		String prefix = bufferPrefix(stage);
+		ImmutableSet.Builder<Integer> readsAlt = ImmutableSet.builder();
+
+		resources.forEach(resource -> {
+			if (resource.view() == net.irisshaders.iris.pipeline.description.ShaderPackResourceView.ALT && resource.logicalId().startsWith(prefix)) {
+				readsAlt.add(Integer.parseInt(resource.logicalId().substring(prefix.length())));
+			}
+		});
+
+		return readsAlt.build();
+	}
+
+	private static String bufferPrefix(ShaderPackPassStage stage) {
+		return stage == ShaderPackPassStage.SHADOW || stage == ShaderPackPassStage.SHADOW_COMPOSITE ? "shadowcolor" : "colortex";
 	}
 
 	private List<ShaderPackPass> passesFor(ShaderPackPassStage stage) {
@@ -1254,6 +1367,17 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 				.filter(source -> source.getSource().isPresent())
 				.forEach(source -> byName.put(source.getName(), source));
 		}
+
+		return Collections.unmodifiableMap(byName);
+	}
+
+	private static Map<String, ComputeSource> computesByName(ComputeSource[] computes) {
+		Map<String, ComputeSource> byName = new LinkedHashMap<>();
+
+		Arrays.stream(computes)
+			.filter(Objects::nonNull)
+			.filter(source -> source.getSource().isPresent())
+			.forEach(source -> byName.put(source.getName(), source));
 
 		return Collections.unmodifiableMap(byName);
 	}

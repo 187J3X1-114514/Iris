@@ -4,6 +4,9 @@ import com.google.common.collect.ImmutableList;
 import com.mojang.blaze3d.opengl.GlStateManager;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntList;
+import net.irisshaders.iris.pipeline.description.ShaderPackPass;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
+import net.irisshaders.iris.pipeline.description.ShaderPackResourceView;
 import net.irisshaders.iris.shaderpack.properties.PackRenderTargetDirectives;
 import net.irisshaders.iris.shaderpack.properties.PackShadowDirectives;
 import net.irisshaders.iris.shadows.ShadowRenderTargets;
@@ -17,41 +20,52 @@ import java.util.List;
 import java.util.Map;
 
 public class ClearPassCreator {
-	public static ImmutableList<ClearPass> createClearPasses(RenderTargets renderTargets, boolean fullClear,
+	public static ImmutableList<ClearPass> createClearPasses(List<ShaderPackPass> descriptors, RenderTargets renderTargets, boolean fullClear,
 															 PackRenderTargetDirectives renderTargetDirectives) {
 		final int maxDrawBuffers = GlStateManager._getInteger(GL21C.GL_MAX_DRAW_BUFFERS);
 
 		// Sort buffers by their clear color so we can group up glClear calls.
-		Map<Vector2i, Map<ClearPassInformation, IntList>> clearByColor = new HashMap<>();
+		Map<Boolean, Map<Vector2i, Map<ClearPassInformation, IntList>>> clearBySideAndColor = new HashMap<>();
 
-		renderTargetDirectives.getRenderTargetSettings().forEach((bufferI, settings) -> {
-			// unboxed
-			final int buffer = bufferI;
-
-			if (fullClear || settings.shouldClear()) {
-				Vector4f defaultClearColor;
-
-				if (buffer == 0) {
-					// colortex0 is cleared to the fog color (with 1.0 alpha) by default.
-					defaultClearColor = null;
-				} else if (buffer == 1) {
-					// colortex1 is cleared to solid white (with 1.0 alpha) by default.
-					defaultClearColor = new Vector4f(1.0f, 1.0f, 1.0f, 1.0f);
-				} else {
-					// all other buffers are cleared to solid black (with 0.0 alpha) by default.
-					defaultClearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
-				}
-
-				RenderTarget target = renderTargets.get(buffer);
-				if (target == null) return;
-				Vector4f clearColor = settings.getClearColor().orElse(defaultClearColor);
-				clearByColor.computeIfAbsent(new Vector2i(target.getWidth(), target.getHeight()), size -> new HashMap<>()).computeIfAbsent(new ClearPassInformation(clearColor, target.getWidth(), target.getHeight()), color -> new IntArrayList()).add(buffer);
+		for (ShaderPackPass descriptor : descriptors) {
+			if (descriptor.type() != ShaderPackPassType.CLEAR || !descriptor.behavior().clearIntent().contains(":colortex")) {
+				continue;
 			}
-		});
+
+			if (fullClear != descriptor.behavior().clearIntent().startsWith("full:")) {
+				continue;
+			}
+
+			int buffer = descriptor.layout().drawBuffers()[0];
+			PackRenderTargetDirectives.RenderTargetSettings settings = renderTargetDirectives.getRenderTargetSettings().get(buffer);
+			if (settings == null) {
+				continue;
+			}
+
+			// unboxed
+			Vector4f defaultClearColor;
+
+			if (buffer == 0) {
+				// colortex0 is cleared to the fog color (with 1.0 alpha) by default.
+				defaultClearColor = null;
+			} else if (buffer == 1) {
+				// colortex1 is cleared to solid white (with 1.0 alpha) by default.
+				defaultClearColor = new Vector4f(1.0f, 1.0f, 1.0f, 1.0f);
+			} else {
+				// all other buffers are cleared to solid black (with 0.0 alpha) by default.
+				defaultClearColor = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
+			}
+
+			RenderTarget target = renderTargets.get(buffer);
+			if (target == null) continue;
+			Vector4f clearColor = settings.getClearColor().orElse(defaultClearColor);
+			boolean alt = clearsAlt(descriptor);
+			clearBySideAndColor.computeIfAbsent(alt, ignored -> new HashMap<>()).computeIfAbsent(new Vector2i(target.getWidth(), target.getHeight()), size -> new HashMap<>()).computeIfAbsent(new ClearPassInformation(clearColor, target.getWidth(), target.getHeight()), color -> new IntArrayList()).add(buffer);
+		}
 
 		List<ClearPass> clearPasses = new ArrayList<>();
 
-		clearByColor.forEach((passSize, vector4fIntListMap) -> vector4fIntListMap.forEach((clearInfo, buffers) -> {
+		clearBySideAndColor.forEach((alt, bySize) -> bySize.forEach((passSize, vector4fIntListMap) -> vector4fIntListMap.forEach((clearInfo, buffers) -> {
 			int startIndex = 0;
 
 			while (startIndex < buffers.size()) {
@@ -65,19 +79,15 @@ public class ClearPassCreator {
 					startIndex++;
 				}
 
-				// No need to clear the depth buffer, since we're using Minecraft's depth buffer.
 				clearPasses.add(new ClearPass(clearInfo.getColor(), clearInfo::getWidth, clearInfo::getHeight,
-					renderTargets.createClearFramebuffer(true, clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
-
-				clearPasses.add(new ClearPass(clearInfo.getColor(), clearInfo::getWidth, clearInfo::getHeight,
-					renderTargets.createClearFramebuffer(false, clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
+					renderTargets.createClearFramebuffer(alt, clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
 			}
-		}));
+		})));
 
 		return ImmutableList.copyOf(clearPasses);
 	}
 
-	public static ImmutableList<ClearPass> createShadowClearPasses(ShadowRenderTargets renderTargets, boolean fullClear,
+	public static ImmutableList<ClearPass> createShadowClearPasses(List<ShaderPackPass> descriptors, ShadowRenderTargets renderTargets, boolean fullClear,
 																   PackShadowDirectives renderTargetDirectives) {
 		if (renderTargets == null) {
 			return ImmutableList.of();
@@ -86,24 +96,34 @@ public class ClearPassCreator {
 		final int maxDrawBuffers = GlStateManager._getInteger(GL21C.GL_MAX_DRAW_BUFFERS);
 
 		// Sort buffers by their clear color so we can group up glClear calls.
-		Map<Vector4f, IntList> clearByColor = new HashMap<>();
+		Map<Boolean, Map<Vector4f, IntList>> clearBySideAndColor = new HashMap<>();
 
-		for (int i = 0; i < renderTargets.getRenderTargetCount(); i++) {
-			if (renderTargets.get(i) != null) {
-				// unboxed
-				PackShadowDirectives.SamplingSettings settings = renderTargetDirectives.getColorSamplingSettings().get(i);
+		for (ShaderPackPass descriptor : descriptors) {
+			if (descriptor.type() != ShaderPackPassType.CLEAR || !descriptor.behavior().clearIntent().contains(":shadowcolor")) {
+				continue;
+			}
 
-				if (fullClear || settings.getClear()) {
-					Vector4f clearColor = settings.getClearColor();
-					clearByColor.computeIfAbsent(clearColor, color -> new IntArrayList()).add(i);
-				}
+			if (fullClear != descriptor.behavior().clearIntent().startsWith("full:")) {
+				continue;
+			}
+
+			int buffer = descriptor.layout().drawBuffers()[0];
+			if (buffer >= renderTargets.getRenderTargetCount()) {
+				continue;
+			}
+
+			if (renderTargets.get(buffer) != null) {
+				PackShadowDirectives.SamplingSettings settings = renderTargetDirectives.getColorSamplingSettings().get(buffer);
+				Vector4f clearColor = settings.getClearColor();
+				boolean alt = clearsAlt(descriptor);
+				clearBySideAndColor.computeIfAbsent(alt, ignored -> new HashMap<>()).computeIfAbsent(clearColor, color -> new IntArrayList()).add(buffer);
 			}
 		}
 
 		List<ClearPass> clearPasses = new ArrayList<>();
 
 
-		clearByColor.forEach((clearColor, buffers) -> {
+		clearBySideAndColor.forEach((alt, byColor) -> byColor.forEach((clearColor, buffers) -> {
 			int startIndex = 0;
 
 			while (startIndex < buffers.size()) {
@@ -117,15 +137,16 @@ public class ClearPassCreator {
 					startIndex++;
 				}
 
-				// No need to clear the depth buffer, since we're using Minecraft's depth buffer.
 				clearPasses.add(new ClearPass(clearColor, renderTargets::getResolution, renderTargets::getResolution,
-					renderTargets.createFramebufferWritingToAlt(clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
-
-				clearPasses.add(new ClearPass(clearColor, renderTargets::getResolution, renderTargets::getResolution,
-					renderTargets.createFramebufferWritingToMain(clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
+					alt ? renderTargets.createFramebufferWritingToAlt(clearBuffers) : renderTargets.createFramebufferWritingToMain(clearBuffers), GL21C.GL_COLOR_BUFFER_BIT));
 			}
-		});
+		}));
 
 		return ImmutableList.copyOf(clearPasses);
+	}
+
+	private static boolean clearsAlt(ShaderPackPass descriptor) {
+		return descriptor.outputs().stream()
+			.anyMatch(output -> output.view() == ShaderPackResourceView.ALT);
 	}
 }

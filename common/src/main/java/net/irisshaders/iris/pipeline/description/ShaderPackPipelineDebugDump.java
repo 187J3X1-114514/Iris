@@ -67,6 +67,8 @@ public final class ShaderPackPipelineDebugDump {
 				out.append("  viewportScale=").append(pass.behavior().viewportScale()).append('\n');
 				out.append("  mipmappedInputs=").append(sorted(pass.behavior().mipmappedInputs())).append('\n');
 				out.append("  barriers=").append(sortedStrings(pass.behavior().barrierRequirements())).append('\n');
+				out.append("  clearIntent=").append(pass.behavior().clearIntent()).append('\n');
+				out.append("  copyIntent=").append(pass.behavior().copyIntent()).append('\n');
 				out.append("  trigger=").append(pass.behavior().trigger()).append('\n');
 				appendLayout(out, pass.layout());
 			}

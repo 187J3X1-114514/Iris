@@ -34,8 +34,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 public final class ShaderPackPipelineBuilder {
-	public static final String BUILDER_SCHEMA_VERSION = "phase-1-description-v1";
-	public static final String RESOURCE_SCHEMA_VERSION = "phase-1-resources-v1";
+	public static final String BUILDER_SCHEMA_VERSION = "phase-3-description-v1";
+	public static final String RESOURCE_SCHEMA_VERSION = "phase-3-resources-v1";
 
 	private final ProgramSet programSet;
 	private final PackDirectives packDirectives;
@@ -129,6 +129,7 @@ public final class ShaderPackPipelineBuilder {
 	}
 
 	private void buildSetupPasses() {
+		addImageClearDescriptors();
 		addClearDescriptors(ShaderPackPassStage.SETUP);
 		addSetupComputes(programSet.getSetup(), ShaderPackPassStage.SETUP, TextureStage.SETUP, "setup", "shaderpack-load-or-resize");
 	}
@@ -315,7 +316,7 @@ public final class ShaderPackPipelineBuilder {
 				programDescriptors(source, finalComputes, null, ProgramId.Final.name(), TextureStage.COMPOSITE_AND_FINAL.name()),
 				bindingDescriptor(ShaderPackPassStage.FINAL, TextureStage.COMPOSITE_AND_FINAL),
 				behavior(directives.getBlendModeOverride().map(Object::toString).orElse("default"), directives.getBlendModeOverride().orElse(null), ViewportData.defaultValue(), directives.getMipmappedBuffers(),
-					hasComputes(finalComputes), "finalizeLevelRendering"),
+					hasComputes(finalComputes), "finalizeLevelRendering", "none", "final-main-color"),
 				layout
 			));
 		}, () -> addFinalFallbackCopy());
@@ -326,7 +327,7 @@ public final class ShaderPackPipelineBuilder {
 			}
 
 			String passId = "final/restore/colortex" + buffer;
-			ShaderPackPassLayout layout = layoutFor(passId, ShaderPackPassStage.FINAL, new int[]{buffer}, Set.of(), Map.of(), Map.of(), Set.of(), compositeFlippedAtLeastOnce,
+			ShaderPackPassLayout layout = layoutFor(passId, ShaderPackPassStage.FINAL, new int[]{buffer}, Set.of(buffer), Map.of(), Map.of(), Set.of(), compositeFlippedAtLeastOnce,
 				"restore-copy:colortex" + buffer + ".alt-to-main");
 			stages.get(ShaderPackPassStage.FINAL).add(new ShaderPackPass(
 				passId,
@@ -337,7 +338,7 @@ public final class ShaderPackPipelineBuilder {
 				List.of(new ShaderPackPassResource("colortex" + buffer, ShaderPackResourceKind.COLORTEX, ShaderPackResourceView.MAIN, "restore-copy-target")),
 				List.of(),
 				emptyBindingDescriptor(passId),
-				behavior("none", null, ViewportData.defaultValue(), Set.of(), false, "finalizeLevelRendering:restore-flipped-buffer"),
+				behavior("none", null, ViewportData.defaultValue(), Set.of(), false, "finalizeLevelRendering:restore-flipped-buffer", "none", "restore:colortex" + buffer + ".alt-to-main"),
 				layout
 			));
 		}
@@ -356,7 +357,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(new ShaderPackPassResource("mainColor", ShaderPackResourceKind.MAIN_TARGET, ShaderPackResourceView.UNRESOLVED, "fallback-copy-target")),
 			List.of(),
 			emptyBindingDescriptor(passId),
-			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, "finalizeLevelRendering:if-final-missing"),
+			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, "finalizeLevelRendering:if-final-missing", "none", "fallback:colortex0-to-main"),
 			layout
 		));
 	}
@@ -378,9 +379,33 @@ public final class ShaderPackPipelineBuilder {
 			List.of(new ShaderPackPassResource(output, ShaderPackResourceKind.DEPTHTEX, ShaderPackResourceView.UNRESOLVED, "depth-copy-target")),
 			List.of(),
 			emptyBindingDescriptor(passId),
-			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, trigger),
+			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, trigger, "none", "depth-copy:" + output),
 			layout
 		));
+	}
+
+	private void addImageClearDescriptors() {
+		for (ImageInformation image : programSet.getPack().getIrisCustomImages()) {
+			if (!image.clear()) {
+				continue;
+			}
+
+			String passId = "setup/clear/image/" + image.name();
+			ShaderPackPassLayout layout = new ShaderPackPassLayout(passId, Map.of(), new int[0], Map.of(), Map.of(), Map.of(), Set.of(), Set.of(), "image-clear:" + image.name());
+			derivedFramebufferKeys.add(layout.derivedFramebufferKey());
+			stages.get(ShaderPackPassStage.SETUP).add(new ShaderPackPass(
+				passId,
+				"clear image " + image.name(),
+				ShaderPackPassStage.SETUP,
+				ShaderPackPassType.CLEAR,
+				List.of(),
+				List.of(new ShaderPackPassResource(image.name(), ShaderPackResourceKind.CUSTOM_IMAGE, ShaderPackResourceView.UNRESOLVED, "image-clear " + image.internalTextureFormat().name())),
+				List.of(),
+				emptyBindingDescriptor(passId),
+				behavior("none", null, ViewportData.defaultValue(), Set.of(), false, "beginLevelRendering:image-clear", "image:" + image.name(), "none"),
+				layout
+			));
+		}
 	}
 
 	private void addClearDescriptors(ShaderPackPassStage stage) {
@@ -410,7 +435,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(new ShaderPackPassResource("colortex" + buffer, ShaderPackResourceKind.COLORTEX, view, "clear " + format)),
 			List.of(),
 			emptyBindingDescriptor(passId),
-			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, trigger),
+			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, trigger, clearClass + ":colortex" + buffer + "." + view.name().toLowerCase() + ":" + format, "none"),
 			layout
 		));
 	}
@@ -441,7 +466,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(new ShaderPackPassResource("shadowcolor" + buffer, ShaderPackResourceKind.SHADOWCOLOR, view, "clear " + format)),
 			List.of(),
 			emptyBindingDescriptor(passId),
-			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, trigger),
+			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, trigger, clearClass + ":shadowcolor" + buffer + "." + view.name().toLowerCase() + ":" + format, "none"),
 			layout
 		));
 	}
@@ -819,14 +844,18 @@ public final class ShaderPackPipelineBuilder {
 	}
 
 	private ShaderPackPassBehavior behavior(String blend, BlendModeOverride blendModeOverride, ViewportData viewportData, Set<Integer> mipmappedInputs, boolean hasCompute, String trigger) {
+		return behavior(blend, blendModeOverride, viewportData, mipmappedInputs, hasCompute, trigger, "none", "none");
+	}
+
+	private ShaderPackPassBehavior behavior(String blend, BlendModeOverride blendModeOverride, ViewportData viewportData, Set<Integer> mipmappedInputs, boolean hasCompute, String trigger, String clearIntent, String copyIntent) {
 		return new ShaderPackPassBehavior(
 			blend,
 			blendModeOverride,
 			viewportData,
 			Set.copyOf(mipmappedInputs),
 			hasCompute ? Set.of("GL_SHADER_IMAGE_ACCESS_BARRIER_BIT", "GL_TEXTURE_FETCH_BARRIER_BIT", "GL_SHADER_STORAGE_BARRIER_BIT") : Set.of(),
-			"none",
-			"none",
+			clearIntent,
+			copyIntent,
 			trigger
 		);
 	}

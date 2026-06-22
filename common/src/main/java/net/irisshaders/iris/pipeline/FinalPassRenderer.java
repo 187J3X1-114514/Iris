@@ -8,7 +8,6 @@ import com.mojang.blaze3d.opengl.GlStateManager;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.VertexFormat;
-import it.unimi.dsi.fastutil.ints.IntList;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
 import net.irisshaders.iris.features.FeatureFlags;
 import net.irisshaders.iris.gl.GLDebug;
@@ -31,18 +30,21 @@ import net.irisshaders.iris.mixin.GlStateManagerAccessor;
 import net.irisshaders.iris.mixinterface.CustomPass;
 import net.irisshaders.iris.pathways.CenterDepthSampler;
 import net.irisshaders.iris.pathways.FullScreenQuadRenderer;
+import net.irisshaders.iris.pipeline.description.ShaderPackPass;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassLayout;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassStage;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
+import net.irisshaders.iris.pipeline.description.ShaderPackProgramDescriptor;
+import net.irisshaders.iris.pipeline.description.ShaderPackResourceView;
+import net.irisshaders.iris.pipeline.description.ShaderPackRuntimePassSnapshot;
 import net.irisshaders.iris.pipeline.transform.PatchShaderType;
 import net.irisshaders.iris.pipeline.transform.ShaderPrinter;
 import net.irisshaders.iris.pipeline.transform.TransformPatcher;
 import net.irisshaders.iris.samplers.IrisImages;
 import net.irisshaders.iris.samplers.IrisSamplers;
 import net.irisshaders.iris.shaderpack.FilledIndirectPointer;
-import net.irisshaders.iris.shaderpack.loading.ProgramId;
 import net.irisshaders.iris.shaderpack.programs.ComputeSource;
-import net.irisshaders.iris.shaderpack.programs.ProgramSet;
 import net.irisshaders.iris.shaderpack.programs.ProgramSource;
-import net.irisshaders.iris.shaderpack.properties.PackRenderTargetDirectives;
-import net.irisshaders.iris.shaderpack.properties.ProgramDirectives;
 import net.irisshaders.iris.shaderpack.texture.TextureStage;
 import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import net.irisshaders.iris.targets.Blaze3dRenderTargetExt;
@@ -63,7 +65,7 @@ import org.lwjgl.opengl.GL46C;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.OptionalInt;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 
@@ -78,7 +80,10 @@ public class FinalPassRenderer {
 
 	@Nullable
 	private final Pass finalPass;
+	@Nullable
+	private final CopyPass fallbackCopyPass;
 	private final ImmutableList<SwapPass> swapPasses;
+	@Nullable
 	private final GlFramebuffer baseline;
 	private final GlFramebuffer colorHolder;
 	private final Object2ObjectMap<String, TextureAccess> irisCustomTextures;
@@ -92,7 +97,7 @@ public class FinalPassRenderer {
 	private int lastColorTextureVersion;
 
 	// TODO: The length of this argument list is getting a bit ridiculous
-	public FinalPassRenderer(WorldRenderingPipeline pipeline, ProgramSet pack, RenderTargets renderTargets, TextureAccess noiseTexture, ShaderStorageBufferHolder holder,
+	public FinalPassRenderer(WorldRenderingPipeline pipeline, List<ShaderPackPass> passDescriptions, Map<String, ProgramSource> sourcesByName, Map<String, ComputeSource> computesByName, RenderTargets renderTargets, TextureAccess noiseTexture, ShaderStorageBufferHolder holder,
 	                         FrameUpdateNotifier updateNotifier, ImmutableSet<Integer> flippedBuffers,
 	                         CenterDepthSampler centerDepthSampler,
 	                         Supplier<ShadowRenderTargets> shadowTargetsSupplier,
@@ -105,32 +110,72 @@ public class FinalPassRenderer {
 		this.irisCustomTextures = irisCustomTextures;
 		this.customImages = customImages;
 
-		final PackRenderTargetDirectives renderTargetDirectives = pack.getPackDirectives().getRenderTargetDirectives();
-		final Map<Integer, PackRenderTargetDirectives.RenderTargetSettings> renderTargetSettings =
-			renderTargetDirectives.getRenderTargetSettings();
-
 		this.noiseTexture = noiseTexture;
 		this.renderTargets = renderTargets;
 		this.customUniforms = customUniforms;
-		this.finalPass = pack.get(ProgramId.Final).map(source -> {
-			Pass pass = new Pass();
-			ProgramDirectives directives = source.getDirectives();
 
-			pass.program = createProgram(source, flippedBuffers, flippedAtLeastOnce, shadowTargetsSupplier);
-			pass.computes = createComputes(pack.getFinalCompute(), flippedBuffers, flippedAtLeastOnce, shadowTargetsSupplier, holder);
-			pass.stageReadsFromAlt = flippedBuffers;
-			pass.mipmappedBuffers = directives.getMipmappedBuffers();
+		Pass builtFinalPass = null;
+		CopyPass builtFallbackCopyPass = null;
+		GlFramebuffer builtBaseline = null;
+		ImmutableList.Builder<SwapPass> swapPasses = ImmutableList.builder();
 
-			return pass;
-		}).orElse(null);
+		for (ShaderPackPass passDescription : passDescriptions) {
+			if (passDescription.type() == ShaderPackPassType.FINAL) {
+				ShaderPackPassLayout layout = passDescription.layout();
+				ProgramSource source = sourceFor(passDescription, sourcesByName);
+				Pass pass = new Pass();
 
-		IntList buffersToBeCleared = pack.getPackDirectives().getRenderTargetDirectives().getBuffersToBeCleared();
+				pass.id = passDescription.id();
+				pass.name = passDescription.name();
+				pass.stage = passDescription.stage();
+				pass.type = passDescription.type();
+				pass.drawBuffers = layout.drawBuffers().clone();
+				pass.attachmentMapping = Map.copyOf(layout.attachmentMapping());
+				pass.explicitPreFlips = Map.copyOf(layout.explicitPreFlips());
+				pass.explicitFlips = Map.copyOf(layout.explicitFlips());
+				pass.resolvedFlips = ImmutableSet.copyOf(layout.resolvedFlips());
+				pass.stageReadsFromAlt = stageReadsFromAlt(layout);
+				pass.flippedAtLeastOnce = ImmutableSet.copyOf(layout.flippedAtLeastOnceSnapshot());
+				pass.mipmappedBuffers = ImmutableSet.copyOf(passDescription.behavior().mipmappedInputs());
+				pass.derivedFramebufferKey = layout.derivedFramebufferKey();
+				pass.hasBlendOverride = passDescription.behavior().blendModeOverride() != null;
+				pass.program = createProgram(source, pass.stageReadsFromAlt, pass.flippedAtLeastOnce, shadowTargetsSupplier);
+				pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), pass.stageReadsFromAlt, pass.flippedAtLeastOnce, shadowTargetsSupplier, holder);
+
+				builtFinalPass = pass;
+			} else if (isFallbackCopy(passDescription)) {
+				CopyPass copyPass = copyPass(passDescription);
+				builtFallbackCopyPass = copyPass;
+				builtBaseline = renderTargets.createGbufferFramebuffer(copyPass.bufferReadsFromAlt, copyPass.drawBuffers);
+			} else if (isRestoreCopy(passDescription)) {
+				CopyPass copyPass = copyPass(passDescription);
+				if (copyPass.drawBuffers.length != 1) {
+					throw new IllegalStateException("Restore copy pass must target exactly one buffer: " + copyPass.id);
+				}
+
+				SwapPass swap = new SwapPass();
+				RenderTarget target = renderTargets.getOrCreate(copyPass.drawBuffers[0]);
+				swap.copyPass = copyPass;
+				swap.target = copyPass.drawBuffers[0];
+				swap.width = target.getWidth();
+				swap.height = target.getHeight();
+				swap.from = renderTargets.createColorFramebuffer(ImmutableSet.of(), new int[]{swap.target});
+				// NB: This is handled in RenderTargets now.
+				//swap.from.readBuffer(target);
+				swap.targetTexture = renderTargets.get(swap.target).getMainTexture();
+
+				swapPasses.add(swap);
+			}
+		}
+
+		this.finalPass = builtFinalPass;
+		this.fallbackCopyPass = builtFallbackCopyPass;
 
 		// The name of this method might seem a bit odd here, but we want a framebuffer with color attachments that line
 		// up with whatever was written last (since we're reading from these framebuffers) instead of trying to create
 		// a framebuffer with color attachments different from what was written last (as we do with normal composite
 		// passes that write to framebuffers).
-		this.baseline = renderTargets.createGbufferFramebuffer(flippedBuffers, new int[]{0});
+		this.baseline = builtBaseline;
 		this.colorHolder = new GlFramebuffer();
 		this.lastColorTextureId = Minecraft.getInstance().gameRenderer.mainRenderTarget().getColorTexture().iris$getGlId();
 		this.lastColorTextureVersion = ((Blaze3dRenderTargetExt) Minecraft.getInstance().gameRenderer.mainRenderTarget()).iris$getColorBufferVersion();
@@ -139,31 +184,88 @@ public class FinalPassRenderer {
 		// TODO: We don't actually fully swap the content, we merely copy it from alt to main
 		// This works for the most part, but it's not perfect. A better approach would be creating secondary
 		// framebuffers for every other frame, but that would be a lot more complex...
-		ImmutableList.Builder<SwapPass> swapPasses = ImmutableList.builder();
-
-		flippedBuffers.forEach((i) -> {
-			int target = i;
-
-			if (buffersToBeCleared.contains(target)) {
-				return;
-			}
-
-			SwapPass swap = new SwapPass();
-			RenderTarget target1 = renderTargets.getOrCreate(target);
-			swap.target = target;
-			swap.width = target1.getWidth();
-			swap.height = target1.getHeight();
-			swap.from = renderTargets.createColorFramebuffer(ImmutableSet.of(), new int[]{target});
-			// NB: This is handled in RenderTargets now.
-			//swap.from.readBuffer(target);
-			swap.targetTexture = renderTargets.get(target).getMainTexture();
-
-			swapPasses.add(swap);
-		});
-
 		this.swapPasses = swapPasses.build();
 
 		GlStateManager._glBindFramebuffer(GL30C.GL_READ_FRAMEBUFFER, 0);
+	}
+
+	private static boolean isFallbackCopy(ShaderPackPass pass) {
+		return pass.type() == ShaderPackPassType.COPY && pass.behavior().copyIntent().startsWith("fallback:");
+	}
+
+	private static boolean isRestoreCopy(ShaderPackPass pass) {
+		return pass.type() == ShaderPackPassType.COPY && pass.behavior().copyIntent().startsWith("restore:");
+	}
+
+	private static CopyPass copyPass(ShaderPackPass passDescription) {
+		ShaderPackPassLayout layout = passDescription.layout();
+		CopyPass copyPass = new CopyPass();
+		copyPass.id = passDescription.id();
+		copyPass.name = passDescription.name();
+		copyPass.stage = passDescription.stage();
+		copyPass.type = passDescription.type();
+		copyPass.drawBuffers = layout.drawBuffers().clone();
+		copyPass.attachmentMapping = Map.copyOf(layout.attachmentMapping());
+		copyPass.explicitPreFlips = Map.copyOf(layout.explicitPreFlips());
+		copyPass.explicitFlips = Map.copyOf(layout.explicitFlips());
+		copyPass.resolvedFlips = ImmutableSet.copyOf(layout.resolvedFlips());
+		copyPass.bufferReadsFromAlt = readsAltFromInputs(passDescription);
+		copyPass.flippedAtLeastOnce = ImmutableSet.copyOf(layout.flippedAtLeastOnceSnapshot());
+		copyPass.mipmappedBuffers = ImmutableSet.copyOf(passDescription.behavior().mipmappedInputs());
+		copyPass.derivedFramebufferKey = layout.derivedFramebufferKey();
+		return copyPass;
+	}
+
+	private static ProgramSource sourceFor(ShaderPackPass pass, Map<String, ProgramSource> sourcesByName) {
+		for (ShaderPackProgramDescriptor descriptor : pass.programDescriptors()) {
+			if (!descriptor.computeSources().isEmpty()) {
+				continue;
+			}
+
+			ProgramSource source = sourcesByName.get(descriptor.sourceName());
+			if (source != null) {
+				return source;
+			}
+		}
+
+		throw new IllegalStateException("Missing final program source for pass " + pass.id());
+	}
+
+	private static ComputeSource[] computeSourcesFor(ShaderPackPass pass, Map<String, ComputeSource> computesByName) {
+		return pass.programDescriptors().stream()
+			.filter(descriptor -> !descriptor.computeSources().isEmpty())
+			.map(descriptor -> {
+				ComputeSource source = computesByName.get(descriptor.sourceName());
+				if (source == null) {
+					throw new IllegalStateException("Missing final compute source " + descriptor.sourceName() + " for pass " + pass.id());
+				}
+				return source;
+			})
+			.toArray(ComputeSource[]::new);
+	}
+
+	private static ImmutableSet<Integer> stageReadsFromAlt(ShaderPackPassLayout layout) {
+		ImmutableSet.Builder<Integer> flipped = ImmutableSet.builder();
+
+		layout.bufferInputViews().forEach((resource, view) -> {
+			if (view == ShaderPackResourceView.ALT && resource.startsWith("colortex")) {
+				flipped.add(Integer.parseInt(resource.substring("colortex".length())));
+			}
+		});
+
+		return flipped.build();
+	}
+
+	private static ImmutableSet<Integer> readsAltFromInputs(ShaderPackPass pass) {
+		ImmutableSet.Builder<Integer> readsAlt = ImmutableSet.builder();
+
+		pass.inputs().forEach(input -> {
+			if (input.view() == ShaderPackResourceView.ALT && input.logicalId().startsWith("colortex")) {
+				readsAlt.add(Integer.parseInt(input.logicalId().substring("colortex".length())));
+			}
+		});
+
+		return readsAlt.build();
 	}
 
 	private static void setupMipmapping(RenderTarget target, boolean readFromAlt) {
@@ -275,6 +377,10 @@ public class FinalPassRenderer {
 			//
 			// We could have used a shader here, but it should be about the same performance either way:
 			// https://stackoverflow.com/a/23994979/18166885
+			if (this.baseline == null || this.fallbackCopyPass == null) {
+				throw new IllegalStateException("Missing final fallback copy descriptor");
+			}
+
 			this.baseline.bindAsReadBuffer();
 
 			IrisRenderSystem.copyTexSubImage2D(main.getColorTexture().iris$getGlId(), GL11C.GL_TEXTURE_2D, 0, 0, 0, 0, 0, baseWidth, baseHeight);
@@ -329,6 +435,22 @@ public class FinalPassRenderer {
 			swapPass.height = target.getHeight();
 			swapPass.targetTexture = target.getMainTexture();
 		}
+	}
+
+	public List<ShaderPackRuntimePassSnapshot> snapshotRuntimePasses() {
+		ImmutableList.Builder<ShaderPackRuntimePassSnapshot> snapshots = ImmutableList.builder();
+
+		if (finalPass != null) {
+			snapshots.add(finalPass.snapshot());
+		} else if (fallbackCopyPass != null) {
+			snapshots.add(fallbackCopyPass.snapshot());
+		}
+
+		for (SwapPass swapPass : swapPasses) {
+			snapshots.add(swapPass.copyPass.snapshot());
+		}
+
+		return snapshots.build();
 	}
 
 	// TODO: Don't just copy this from DeferredWorldRenderingPipeline
@@ -457,21 +579,106 @@ public class FinalPassRenderer {
 	}
 
 	private static final class Pass {
+		String id;
+		String name;
+		ShaderPackPassStage stage;
+		ShaderPackPassType type;
 		Program program;
 		ComputeProgram[] computes;
+		int[] drawBuffers;
+		Map<Integer, Integer> attachmentMapping;
+		Map<Integer, Boolean> explicitPreFlips;
+		Map<Integer, Boolean> explicitFlips;
+		ImmutableSet<Integer> resolvedFlips;
 		ImmutableSet<Integer> stageReadsFromAlt;
+		ImmutableSet<Integer> flippedAtLeastOnce;
 		ImmutableSet<Integer> mipmappedBuffers;
+		String derivedFramebufferKey;
+		boolean hasBlendOverride;
 
 		private void destroy() {
 			this.program.destroy();
 		}
+
+		ShaderPackRuntimePassSnapshot snapshot() {
+			return new ShaderPackRuntimePassSnapshot(
+				id,
+				name,
+				stage,
+				type,
+				drawBuffers,
+				attachmentMapping,
+				explicitPreFlips,
+				explicitFlips,
+				resolvedFlips,
+				stageReadsFromAlt,
+				flippedAtLeastOnce,
+				mipmappedBuffers,
+				net.irisshaders.iris.gl.framebuffer.ViewportData.defaultValue(),
+				hasBlendOverride,
+				countComputes(computes),
+				true,
+				derivedFramebufferKey
+			);
+		}
+	}
+
+	private static final class CopyPass {
+		String id;
+		String name;
+		ShaderPackPassStage stage;
+		ShaderPackPassType type;
+		int[] drawBuffers;
+		Map<Integer, Integer> attachmentMapping;
+		Map<Integer, Boolean> explicitPreFlips;
+		Map<Integer, Boolean> explicitFlips;
+		ImmutableSet<Integer> resolvedFlips;
+		ImmutableSet<Integer> bufferReadsFromAlt;
+		ImmutableSet<Integer> flippedAtLeastOnce;
+		ImmutableSet<Integer> mipmappedBuffers;
+		String derivedFramebufferKey;
+
+		ShaderPackRuntimePassSnapshot snapshot() {
+			return new ShaderPackRuntimePassSnapshot(
+				id,
+				name,
+				stage,
+				type,
+				drawBuffers,
+				attachmentMapping,
+				explicitPreFlips,
+				explicitFlips,
+				resolvedFlips,
+				bufferReadsFromAlt,
+				flippedAtLeastOnce,
+				mipmappedBuffers,
+				net.irisshaders.iris.gl.framebuffer.ViewportData.defaultValue(),
+				false,
+				0,
+				false,
+				derivedFramebufferKey
+			);
+		}
 	}
 
 	private static final class SwapPass {
+		CopyPass copyPass;
 		public int target;
 		public int width;
 		public int height;
 		GlFramebuffer from;
 		int targetTexture;
+	}
+
+	private static int countComputes(ComputeProgram[] computes) {
+		int count = 0;
+
+		for (ComputeProgram compute : computes) {
+			if (compute != null) {
+				count++;
+			}
+		}
+
+		return count;
 	}
 }

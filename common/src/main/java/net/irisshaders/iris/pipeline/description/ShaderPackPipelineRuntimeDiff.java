@@ -15,11 +15,15 @@ public record ShaderPackPipelineRuntimeDiff(
 	List<String> notes
 ) {
 	private static final EnumSet<ShaderPackPassStage> STRICT_RUNTIME_STAGES = EnumSet.of(
+		ShaderPackPassStage.SETUP,
 		ShaderPackPassStage.BEGIN,
 		ShaderPackPassStage.PREPARE,
+		ShaderPackPassStage.SHADOW,
 		ShaderPackPassStage.DEFERRED,
 		ShaderPackPassStage.COMPOSITE,
-		ShaderPackPassStage.SHADOW_COMPOSITE
+		ShaderPackPassStage.SHADOW_COMPOSITE,
+		ShaderPackPassStage.GBUFFERS,
+		ShaderPackPassStage.FINAL
 	);
 
 	public ShaderPackPipelineRuntimeDiff {
@@ -46,9 +50,10 @@ public record ShaderPackPipelineRuntimeDiff(
 			compareStage(description, runtime, stage, differences);
 		}
 
-		notes.add("scope=phase1-to-phase2 seam only; final/setup/clear/copy/external draw are outside this runtime diff");
+		notes.add("scope=phase1-to-phase3; composite stages are runtime renderer snapshots, setup/shadow/gbuffers/final include descriptor-backed phase 3 snapshots");
+		notes.add("gbuffers copy descriptors are verified only; depth copy execution remains lifecycle-triggered by beginHand/beginTranslucents");
 		notes.add("descriptionStageCounts=" + STRICT_RUNTIME_STAGES.stream()
-			.collect(Collectors.toMap(stage -> stage.name(), stage -> description.stages().getOrDefault(stage, List.of()).size(), (a, b) -> a, java.util.LinkedHashMap::new)));
+			.collect(Collectors.toMap(stage -> stage.name(), stage -> expectedPasses(description, stage).size(), (a, b) -> a, java.util.LinkedHashMap::new)));
 
 		return new ShaderPackPipelineRuntimeDiff(differences, notes);
 	}
@@ -91,7 +96,7 @@ public record ShaderPackPipelineRuntimeDiff(
 	}
 
 	private static void compareStage(ShaderPackPipeline description, ShaderPackPipelineRuntimeSnapshot runtime, ShaderPackPassStage stage, List<String> differences) {
-		List<ShaderPackPass> expected = description.stages().getOrDefault(stage, List.of());
+		List<ShaderPackPass> expected = expectedPasses(description, stage);
 		List<ShaderPackRuntimePassSnapshot> actual = runtime.passesByStage().getOrDefault(stage, List.of());
 
 		if (expected.size() != actual.size()) {
@@ -102,6 +107,23 @@ public record ShaderPackPipelineRuntimeDiff(
 		for (int i = 0; i < shared; i++) {
 			comparePass(stage, i, expected.get(i), actual.get(i), differences);
 		}
+	}
+
+	private static List<ShaderPackPass> expectedPasses(ShaderPackPipeline description, ShaderPackPassStage stage) {
+		List<ShaderPackPass> passes = description.stages().getOrDefault(stage, List.of());
+
+		return switch (stage) {
+			case SETUP -> passes.stream()
+				.filter(pass -> pass.type() == ShaderPackPassType.SETUP || pass.type() == ShaderPackPassType.CLEAR)
+				.toList();
+			case SHADOW -> passes.stream()
+				.filter(pass -> pass.type() == ShaderPackPassType.COMPUTE || pass.type() == ShaderPackPassType.CLEAR)
+				.toList();
+			case GBUFFERS -> passes.stream()
+				.filter(pass -> pass.type() == ShaderPackPassType.COPY)
+				.toList();
+			default -> passes;
+		};
 	}
 
 	private static void comparePass(ShaderPackPassStage stage, int index, ShaderPackPass expected, ShaderPackRuntimePassSnapshot actual, List<String> differences) {
@@ -117,14 +139,18 @@ public record ShaderPackPipelineRuntimeDiff(
 		compareValue(prefix + "explicitPreFlips", layout.explicitPreFlips(), actual.explicitPreFlips(), differences);
 		compareValue(prefix + "explicitFlips", layout.explicitFlips(), actual.explicitFlips(), differences);
 		compareValue(prefix + "resolvedFlips", layout.resolvedFlips(), actual.resolvedFlips(), differences);
-		compareValue(prefix + "bufferReadsFromAlt", bufferReadsFromAlt(layout, stage), actual.bufferReadsFromAlt(), differences);
+		compareValue(prefix + "bufferReadsFromAlt", expectedBufferReadsFromAlt(expected), actual.bufferReadsFromAlt(), differences);
 		compareValue(prefix + "flippedAtLeastOnceSnapshot", layout.flippedAtLeastOnceSnapshot(), actual.flippedAtLeastOnceSnapshot(), differences);
 		compareValue(prefix + "mipmappedInputs", expected.behavior().mipmappedInputs(), actual.mipmappedInputs(), differences);
 		compareValue(prefix + "viewportScale", expected.behavior().viewportScale(), actual.viewportScale(), differences);
 		compareValue(prefix + "hasBlendOverride", expected.behavior().blendModeOverride() != null, actual.hasBlendOverride(), differences);
 		compareValue(prefix + "computeProgramCount", computeDescriptorCount(expected), actual.computeProgramCount(), differences);
-		compareValue(prefix + "hasGraphicsProgram", expected.type() != ShaderPackPassType.COMPUTE, actual.hasGraphicsProgram(), differences);
+		compareValue(prefix + "hasGraphicsProgram", expectsGraphicsProgram(expected.type()), actual.hasGraphicsProgram(), differences);
 		compareValue(prefix + "derivedFramebufferKey", layout.derivedFramebufferKey(), actual.derivedFramebufferKey(), differences);
+	}
+
+	private static boolean expectsGraphicsProgram(ShaderPackPassType type) {
+		return type == ShaderPackPassType.GRAPHICS || type == ShaderPackPassType.GRAPHICS_WITH_COMPUTE || type == ShaderPackPassType.FINAL;
 	}
 
 	private static int computeDescriptorCount(ShaderPackPass pass) {
@@ -133,8 +159,20 @@ public record ShaderPackPipelineRuntimeDiff(
 			.count();
 	}
 
+	private static Set<Integer> expectedBufferReadsFromAlt(ShaderPackPass pass) {
+		if (pass.type() == ShaderPackPassType.CLEAR) {
+			return Set.of();
+		}
+
+		if (pass.type() == ShaderPackPassType.COPY) {
+			return bufferReadsFromAlt(pass.inputs(), pass.stage());
+		}
+
+		return bufferReadsFromAlt(pass.layout(), pass.stage());
+	}
+
 	private static Set<Integer> bufferReadsFromAlt(ShaderPackPassLayout layout, ShaderPackPassStage stage) {
-		String prefix = stage == ShaderPackPassStage.SHADOW_COMPOSITE ? "shadowcolor" : "colortex";
+		String prefix = bufferPrefix(stage);
 
 		return layout.bufferInputViews().entrySet().stream()
 			.filter(entry -> entry.getValue() == ShaderPackResourceView.ALT)
@@ -142,6 +180,21 @@ public record ShaderPackPipelineRuntimeDiff(
 			.map(entry -> Integer.parseInt(entry.getKey().substring(prefix.length())))
 			.sorted()
 			.collect(Collectors.toCollection(LinkedHashSet::new));
+	}
+
+	private static Set<Integer> bufferReadsFromAlt(List<ShaderPackPassResource> resources, ShaderPackPassStage stage) {
+		String prefix = bufferPrefix(stage);
+
+		return resources.stream()
+			.filter(resource -> resource.view() == ShaderPackResourceView.ALT)
+			.filter(resource -> resource.logicalId().startsWith(prefix))
+			.map(resource -> Integer.parseInt(resource.logicalId().substring(prefix.length())))
+			.sorted()
+			.collect(Collectors.toCollection(LinkedHashSet::new));
+	}
+
+	private static String bufferPrefix(ShaderPackPassStage stage) {
+		return stage == ShaderPackPassStage.SHADOW || stage == ShaderPackPassStage.SHADOW_COMPOSITE ? "shadowcolor" : "colortex";
 	}
 
 	private static void compareArray(String label, int[] expected, int[] actual, List<String> differences) {
