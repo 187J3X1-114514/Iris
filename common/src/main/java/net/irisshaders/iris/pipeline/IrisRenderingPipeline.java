@@ -52,6 +52,8 @@ import net.irisshaders.iris.pbr.format.TextureFormatLoader;
 import net.irisshaders.iris.pbr.texture.PBRTextureHolder;
 import net.irisshaders.iris.pbr.texture.PBRTextureManager;
 import net.irisshaders.iris.pbr.texture.PBRType;
+import net.irisshaders.iris.pipeline.description.CompatibilityResourceDirective;
+import net.irisshaders.iris.pipeline.description.CompatibilityResourceKind;
 import net.irisshaders.iris.pipeline.description.ShaderPackPass;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassLayout;
 import net.irisshaders.iris.pipeline.description.ShaderPackPassResource;
@@ -390,7 +392,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 					.levelSamplers(whitePixel, true, true, false)
 					.separateHardwareSamplers(separateHardwareSamplers)
 					.build());
-			shouldBindPBR |= installRecord.installedCompatibilityResources().contains("pbr-normal-specular-samplers");
+			shouldBindPBR |= installedPbrCompatibility(installRecord);
 
 			return builder.build();
 		};
@@ -794,7 +796,11 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 				.levelSamplers(whitePixel, hasTexture, hasLightmap, hasOverlay)
 				.separateHardwareSamplers(separateHardwareSamplers)
 				.build());
-		shouldBindPBR |= installRecord.installedCompatibilityResources().contains("pbr-normal-specular-samplers");
+		shouldBindPBR |= installedPbrCompatibility(installRecord);
+	}
+
+	private static boolean installedPbrCompatibility(ShaderPackPipelineResources.RuntimeBindingInstallRecord installRecord) {
+		return installRecord.installedCompatibilityResources().contains(CompatibilityResourceDirective.of(CompatibilityResourceKind.PBR_NORMAL_SPECULAR_SAMPLERS));
 	}
 
 	private boolean shouldRemovePhase = false;
