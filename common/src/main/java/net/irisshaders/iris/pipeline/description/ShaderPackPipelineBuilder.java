@@ -6,6 +6,8 @@ import net.irisshaders.iris.features.FeatureFlags;
 import net.irisshaders.iris.gl.blending.BlendModeOverride;
 import net.irisshaders.iris.gl.framebuffer.ViewportData;
 import net.irisshaders.iris.pipeline.CompositePass;
+import net.irisshaders.iris.pipeline.ExternalDrawHostPipelineDescriptor;
+import net.irisshaders.iris.pipeline.IrisPipelines;
 import net.irisshaders.iris.pipeline.WorldRenderingPhase;
 import net.irisshaders.iris.pipeline.programs.ShaderKey;
 import net.irisshaders.iris.shaderpack.ImageInformation;
@@ -24,6 +26,7 @@ import org.joml.Vector2i;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -35,8 +38,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 public final class ShaderPackPipelineBuilder {
-	public static final String BUILDER_SCHEMA_VERSION = "phase-3-description-v1";
-	public static final String RESOURCE_SCHEMA_VERSION = "phase-4-resources-v1";
+	public static final String BUILDER_SCHEMA_VERSION = "phase-5-external-draw-v1";
+	public static final String RESOURCE_SCHEMA_VERSION = "phase-5-external-draw-resources-v1";
 
 	private final ProgramSet programSet;
 	private final PackDirectives packDirectives;
@@ -560,7 +563,7 @@ public final class ShaderPackPipelineBuilder {
 		boolean participates = phase != WorldRenderingPhase.NONE && phase != WorldRenderingPhase.DEBUG;
 		String passthroughReason = participates ? "" : (phase == WorldRenderingPhase.NONE ? "no active world rendering phase" : "debug rendering is not shaderpack-overridden by this metadata pass");
 		List<String> shaderKeys = shaderKeysFor(phase).stream().map(Enum::name).sorted().collect(Collectors.toList());
-		String selector = phase == WorldRenderingPhase.NONE ? "none" : "IrisPipelines::getPipeline + ShaderOverrides phase helpers";
+		String selector = phase == WorldRenderingPhase.NONE ? "none" : externalSelectorDescriptor(shaderKeysFor(phase));
 		String framebufferPolicy = switch (phaseClass) {
 			case "shadow" -> "shadow framebuffer resolver";
 			case "hand" -> "hand framebuffer resolver with beginHand depth copy";
@@ -590,8 +593,103 @@ public final class ShaderPackPipelineBuilder {
 			sodiumPolicy,
 			participates,
 			passthroughReason,
-			shaderKeys
+			shaderKeys,
+			externalRuntimeDescriptors(phase, phaseClass, shaderKeysFor(phase), participates)
 		);
+	}
+
+	private List<ExternalDrawRuntimeDescriptor> externalRuntimeDescriptors(WorldRenderingPhase phase, String phaseClass, Set<ShaderKey> shaderKeys, boolean participates) {
+		if (!participates) {
+			return List.of();
+		}
+
+		ShaderPackBindingDescriptor binding = bindingDescriptor(ShaderPackPassStage.GBUFFERS, TextureStage.GBUFFERS_AND_SHADOW);
+		List<ExternalDrawBoundary> boundaries = usesTranslucentBoundary(phaseClass)
+			? List.of(ExternalDrawBoundary.BEFORE_TRANSLUCENT, ExternalDrawBoundary.AFTER_TRANSLUCENT)
+			: List.of(ExternalDrawBoundary.NONE);
+
+		List<ExternalDrawRuntimeDescriptor> descriptors = new ArrayList<>();
+		for (ShaderKey shaderKey : shaderKeys.stream().sorted(Comparator.comparing(Enum::name)).toList()) {
+			int[] drawBuffers = externalDrawBuffers(shaderKey);
+			for (ExternalDrawBoundary boundary : boundaries) {
+				Set<Integer> writesToMain = externalWritesToMain(boundary, drawBuffers);
+				Set<Integer> writesToAlt = externalWritesToAlt(boundary, drawBuffers);
+				DerivedFramebufferKey key = DerivedFramebufferKey.of("external-draw:" + phase.name() + ":" + shaderKey.name() + ":" + boundary.name());
+				descriptors.add(new ExternalDrawRuntimeDescriptor(boundary, shaderKey, binding, key, drawBuffers, sortedArray(writesToMain), sortedArray(writesToAlt),
+					"ProgramSource.directives.drawBuffers",
+					"boundary selects main/alt view only; it does not change drawBuffers target set",
+					externalRuntimeViewPolicy(boundary)));
+			}
+		}
+
+		return List.copyOf(descriptors);
+	}
+
+	private boolean usesTranslucentBoundary(String phaseClass) {
+		return switch (phaseClass) {
+			case "sky", "terrain", "entities", "block-entities", "hand", "translucent", "particles", "clouds", "weather", "world-border" -> true;
+			default -> false;
+		};
+	}
+
+	private int[] externalDrawBuffers(ShaderKey shaderKey) {
+		return programSet.get(shaderKey.getProgram())
+			.map(source -> source.getDirectives().getDrawBuffers().clone())
+			.orElseGet(() -> new int[] {0});
+	}
+
+	private Set<Integer> externalWritesToMain(ExternalDrawBoundary boundary, int[] drawBuffers) {
+		Set<Integer> flipped = switch (boundary) {
+			case BEFORE_TRANSLUCENT, NONE -> flippedAfterPrepare;
+			case AFTER_TRANSLUCENT -> flippedAfterTranslucent;
+		};
+		Set<Integer> writesToMain = new LinkedHashSet<>();
+		for (int drawBuffer : drawBuffers) {
+			if (!flipped.contains(drawBuffer)) {
+				writesToMain.add(drawBuffer);
+			}
+		}
+		return writesToMain;
+	}
+
+	private Set<Integer> externalWritesToAlt(ExternalDrawBoundary boundary, int[] drawBuffers) {
+		Set<Integer> flipped = switch (boundary) {
+			case BEFORE_TRANSLUCENT, NONE -> flippedAfterPrepare;
+			case AFTER_TRANSLUCENT -> flippedAfterTranslucent;
+		};
+		Set<Integer> writesToAlt = new LinkedHashSet<>();
+		for (int drawBuffer : drawBuffers) {
+			if (flipped.contains(drawBuffer)) {
+				writesToAlt.add(drawBuffer);
+			}
+		}
+		return writesToAlt;
+	}
+
+	private int[] sortedArray(Set<Integer> values) {
+		return values.stream().sorted().mapToInt(Integer::intValue).toArray();
+	}
+
+	private String externalRuntimeViewPolicy(ExternalDrawBoundary boundary) {
+		return switch (boundary) {
+			case BEFORE_TRANSLUCENT -> "flippedAfterPrepare";
+			case AFTER_TRANSLUCENT -> "flippedAfterTranslucent";
+			case NONE -> "phase-local current view";
+		};
+	}
+
+	private String externalSelectorDescriptor(Set<ShaderKey> shaderKeys) {
+		List<String> descriptors = IrisPipelines.externalDrawHostPipelineDescriptors().stream()
+			.filter(descriptor -> shaderKeys.contains(descriptor.shaderKey()))
+			.map(this::selectorSummary)
+			.sorted()
+			.toList();
+		return descriptors.isEmpty() ? "IrisPipelines runtime selector; no direct host pipeline rows for this phase" : descriptors.toString();
+	}
+
+	private String selectorSummary(ExternalDrawHostPipelineDescriptor descriptor) {
+		return descriptor.descriptorId() + "->" + descriptor.shaderKey().name() + "{policy=" + descriptor.selectorPolicy()
+			+ ",deps=" + descriptor.runtimeDependencies() + "}";
 	}
 
 	private String phaseClass(WorldRenderingPhase phase) {

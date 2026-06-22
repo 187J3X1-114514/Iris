@@ -126,6 +126,7 @@ public final class ShaderPackPipelineDebugDump {
 			out.append("  sodiumPolicy=").append(phase.sodiumPolicy()).append('\n');
 			out.append("  passthroughReason=").append(phase.passthroughReason()).append('\n');
 			out.append("  shaderKeys=").append(phase.shaderKeys()).append('\n');
+			out.append("  runtimeDescriptors=").append(phase.runtimeDescriptors().stream().map(ExternalDrawRuntimeDescriptor::debugSummary).collect(Collectors.toList())).append('\n');
 		}
 	}
 

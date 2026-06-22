@@ -12,6 +12,9 @@ import net.irisshaders.iris.shadows.ShadowRenderingState;
 import net.minecraft.client.renderer.RenderPipelines;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 
 import static net.irisshaders.iris.pipeline.programs.ShaderOverrides.isBlockEntities;
@@ -19,6 +22,8 @@ import static net.irisshaders.iris.pipeline.programs.ShaderOverrides.isBlockEnti
 public class IrisPipelines {
 	private static final Map<RenderPipeline, Function<IrisRenderingPipeline, ShaderKey>> coreShaderMap = new Object2ObjectArrayMap<>();
 	private static final Map<RenderPipeline, Function<IrisRenderingPipeline, ShaderKey>> coreShaderMapShadow = new Object2ObjectArrayMap<>();
+	private static final Map<RenderPipeline, ExternalDrawHostPipelineDescriptor> coreShaderMetadata = new Object2ObjectArrayMap<>();
+	private static final Map<RenderPipeline, ExternalDrawHostPipelineDescriptor> coreShaderShadowMetadata = new Object2ObjectArrayMap<>();
 	private static final Function<IrisRenderingPipeline, ShaderKey> FAKE_FUNCTION = p -> null;
 
 	static {
@@ -163,6 +168,11 @@ public class IrisPipelines {
 	}
 
 	private static void assignToMain(RenderPipeline pipeline, Function<IrisRenderingPipeline, ShaderKey> o) {
+		ShaderKey representativeKey = o.apply(null);
+		assignToMain(pipeline, o, representativeKey, "static shader key selector");
+	}
+
+	private static void assignToMain(RenderPipeline pipeline, Function<IrisRenderingPipeline, ShaderKey> o, ShaderKey representativeKey, String selectorPolicy) {
 		if (coreShaderMap.containsKey(pipeline)) {
 			Function<IrisRenderingPipeline, ShaderKey> current = coreShaderMap.get(pipeline);
 			ShaderKey currentKey = current.apply(null);
@@ -173,6 +183,7 @@ public class IrisPipelines {
 		}
 
 		coreShaderMap.put(pipeline, o);
+		coreShaderMetadata.put(pipeline, descriptor(pipeline, representativeKey, false, selectorPolicy));
 	}
 
 	private static void assignToShadow(RenderPipeline pipeline, Function<IrisRenderingPipeline, ShaderKey> o) {
@@ -181,6 +192,17 @@ public class IrisPipelines {
 		}
 
 		coreShaderMapShadow.put(pipeline, o);
+		coreShaderShadowMetadata.put(pipeline, descriptor(pipeline, o.apply(null), true, "shadow shader key selector"));
+	}
+
+	private static ExternalDrawHostPipelineDescriptor descriptor(RenderPipeline pipeline, ShaderKey key, boolean shadow, String selectorPolicy) {
+		String hostPipelineId = pipeline.getLocation().toString();
+		String descriptorId = (shadow ? "shadow:" : "main:") + hostPipelineId;
+		String dependencies = shadow ? "ShadowRenderingState" : switch (selectorPolicy) {
+			case "entity cutout selector", "entity translucent selector", "text selector", "text intensity selector" -> "WorldRenderingPhase, HandRenderer";
+			default -> "WorldRenderingPhase";
+		};
+		return new ExternalDrawHostPipelineDescriptor(descriptorId, hostPipelineId, key, shadow, selectorPolicy, dependencies, "");
 	}
 
 	private static ShaderKey getCutout(Object p) {
@@ -221,6 +243,11 @@ public class IrisPipelines {
 
 	@Nullable
 	public static ShaderKey getPipeline(IrisRenderingPipeline pipeline, RenderPipeline shader) {
+		return resolveExternalDrawShaderKey(pipeline, shader);
+	}
+
+	@Nullable
+	public static ShaderKey resolveExternalDrawShaderKey(IrisRenderingPipeline pipeline, RenderPipeline shader) {
         if (shader.getLocation().getNamespace().contains("sodium")) {
             if (shader.getColorTargetState().blendFunction().isPresent()) {
                 return ShadowRenderingState.areShadowsCurrentlyBeingRendered() ? ShaderKey.SHADOW_SODIUM_TERRAIN_TRANSLUCENT : ShaderKey.SODIUM_TERRAIN_TRANSLUCENT;
@@ -235,6 +262,31 @@ public class IrisPipelines {
 		} else {
 			return coreShaderMap.getOrDefault(shader, FAKE_FUNCTION).apply(pipeline);
 		}
+	}
+
+	public static List<ExternalDrawHostPipelineDescriptor> externalDrawHostPipelineDescriptors() {
+		List<ExternalDrawHostPipelineDescriptor> descriptors = new ArrayList<>();
+		descriptors.addAll(coreShaderMetadata.values());
+		descriptors.addAll(coreShaderShadowMetadata.values());
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("main:sodium-terrain-solid", "sodium:*", ShaderKey.SODIUM_TERRAIN_SOLID, false, "sodium namespace without CUTOUT or blend", "RenderPipeline namespace, shader defines, blend function", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("main:sodium-terrain-cutout", "sodium:*", ShaderKey.SODIUM_TERRAIN_CUTOUT, false, "sodium namespace with CUTOUT define", "RenderPipeline namespace, shader defines, blend function", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("main:sodium-terrain-translucent", "sodium:*", ShaderKey.SODIUM_TERRAIN_TRANSLUCENT, false, "sodium namespace with blend function", "RenderPipeline namespace, shader defines, blend function", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("shadow:sodium-terrain-solid", "sodium:*", ShaderKey.SHADOW_SODIUM_TERRAIN_SOLID, true, "shadow sodium namespace without CUTOUT or blend", "ShadowRenderingState, RenderPipeline namespace, shader defines, blend function", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("shadow:sodium-terrain-cutout", "sodium:*", ShaderKey.SHADOW_SODIUM_TERRAIN_CUTOUT, true, "shadow sodium namespace with CUTOUT define", "ShadowRenderingState, RenderPipeline namespace, shader defines, blend function", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("shadow:sodium-terrain-translucent", "sodium:*", ShaderKey.SHADOW_SODIUM_TERRAIN_TRANSLUCENT, true, "shadow sodium namespace with blend function", "ShadowRenderingState, RenderPipeline namespace, shader defines, blend function", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-cutout", "minecraft:entity_*", ShaderKey.HAND_CUTOUT, false, "HandRenderer solid entity selector", "HandRenderer, WorldRenderingPhase", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-cutout-diffuse", "minecraft:entity_*", ShaderKey.HAND_CUTOUT_DIFFUSE, false, "HandRenderer solid diffuse selector", "HandRenderer, WorldRenderingPhase", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-text", "minecraft:text*", ShaderKey.HAND_TEXT, false, "HandRenderer solid text selector", "HandRenderer, WorldRenderingPhase", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-text-translucent", "minecraft:text*", ShaderKey.HAND_TEXT_TRANSLUCENT, false, "HandRenderer translucent text selector", "HandRenderer, WorldRenderingPhase", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-translucent", "minecraft:entity_*", ShaderKey.HAND_TRANSLUCENT, false, "HandRenderer translucent entity selector", "HandRenderer, WorldRenderingPhase", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:hand-water-diffuse", "minecraft:entity_*", ShaderKey.HAND_WATER_DIFFUSE, false, "HandRenderer translucent diffuse selector", "HandRenderer, WorldRenderingPhase", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-diffuse", "minecraft:entity_*", ShaderKey.BLOCK_ENTITY_DIFFUSE, false, "block entity cutout selector", "WorldRenderingPhase.BLOCK_ENTITIES", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-translucent", "minecraft:entity_*", ShaderKey.BE_TRANSLUCENT, false, "block entity translucent selector", "WorldRenderingPhase.BLOCK_ENTITIES", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-text", "minecraft:text*", ShaderKey.TEXT_BE, false, "block entity text selector", "WorldRenderingPhase.BLOCK_ENTITIES", ""));
+		descriptors.add(new ExternalDrawHostPipelineDescriptor("dynamic:block-entity-text-intensity", "minecraft:text*", ShaderKey.TEXT_INTENSITY_BE, false, "block entity text intensity selector", "WorldRenderingPhase.BLOCK_ENTITIES", ""));
+		return descriptors.stream()
+			.sorted(Comparator.comparing(ExternalDrawHostPipelineDescriptor::descriptorId))
+			.toList();
 	}
 
 	public static void assignPipeline(RenderPipeline pipeline, ShaderKey programId) {

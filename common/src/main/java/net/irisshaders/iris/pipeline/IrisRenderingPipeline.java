@@ -60,6 +60,7 @@ import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipeline;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineBuilder;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineDebugDump;
+import net.irisshaders.iris.pipeline.description.ShaderPackExternalDrawRuntimeDiff;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineResourceRuntimeDiff;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineResources;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineRuntimeDiff;
@@ -545,6 +546,12 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 		Iris.logger.info("Shaderpack phase 4 resources runtime diff: {}", shaderPackPipelineResourceRuntimeDiff.summary());
 		if (shaderPackPipelineResourceRuntimeDiff.hasDifferences()) {
 			Iris.logger.warn("Shaderpack phase 4 resources runtime diff details:\n{}", shaderPackPipelineResourceRuntimeDiff.dump());
+		}
+		ShaderPackExternalDrawRuntimeDiff externalDrawRuntimeDiff = ShaderPackExternalDrawRuntimeDiff.compare(shaderPackPipelineDescription, programSet);
+		Iris.logger.info("Shaderpack phase 5 external draw runtime diff: {}", externalDrawRuntimeDiff.summary());
+		Iris.logger.info("Shaderpack phase 5 external draw matrix: {}", externalDrawRuntimeDiff.matrixSummary());
+		if (externalDrawRuntimeDiff.hasDifferences()) {
+			Iris.logger.warn("Shaderpack phase 5 external draw runtime diff details:\n{}", externalDrawRuntimeDiff.dump());
 		}
 	}
 

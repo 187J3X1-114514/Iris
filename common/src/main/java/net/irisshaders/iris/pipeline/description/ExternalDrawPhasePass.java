@@ -18,6 +18,11 @@ public record ExternalDrawPhasePass(
 	String sodiumPolicy,
 	boolean participatesInOverride,
 	String passthroughReason,
-	List<String> shaderKeys
+	List<String> shaderKeys,
+	List<ExternalDrawRuntimeDescriptor> runtimeDescriptors
 ) {
+	public ExternalDrawPhasePass {
+		shaderKeys = List.copyOf(shaderKeys);
+		runtimeDescriptors = List.copyOf(runtimeDescriptors);
+	}
 }
