@@ -249,6 +249,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
                 FormatAnalyzer.createFormat(true, true, true, true)); // TODO 26.2... or never.
 
 		RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
+		this.shaderPackPipelineDescription = ShaderPackPipelineBuilder.build(programSet, main.width, main.height);
 		GpuTexture depthTexture  = main.getDepthTexture();
 		int internalFormat = GlConst.toGlInternalId(depthTexture.getFormat());
 		DepthBufferFormat depthBufferFormat = DepthBufferFormat.fromGlEnumOrDefault(internalFormat);
@@ -276,10 +277,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 			}
 		}
 
-		this.clearImages = customImages.stream()
-			.filter(GlImage::shouldClear)
-			.map(ImageClearPass::create)
-			.collect(ImmutableList.toImmutableList());
+		this.clearImages = createImageClearPasses(passesFor(ShaderPackPassStage.SETUP), customImages);
 
 		if (programSet.getPackDirectives().getParticleRenderingSettings() != ParticleRenderingSettings.UNSET) {
 			this.particleRenderingSettings = programSet.getPackDirectives().getParticleRenderingSettings();
@@ -291,7 +289,6 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 
 		this.renderTargets = new RenderTargets(main.width, main.height, depthTexture, ((Blaze3dRenderTargetExt) main).iris$getDepthBufferVersion(), depthBufferFormat, programSet.getPackDirectives().getRenderTargetDirectives().getRenderTargetSettings(), programSet.getPackDirectives());
-		this.shaderPackPipelineDescription = ShaderPackPipelineBuilder.build(programSet, main.width, main.height);
 		this.sunPathRotation = programSet.getPackDirectives().getSunPathRotation();
 
 		PackShadowDirectives shadowDirectives = programSet.getPackDirectives().getShadowDirectives();
@@ -696,6 +693,36 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 		}
 
 		return sources.build();
+	}
+
+	private static ImmutableList<ImageClearPass> createImageClearPasses(List<ShaderPackPass> passDescriptions, Set<GlImage> customImages) {
+		Map<String, GlImage> imagesByName = new LinkedHashMap<>();
+		for (GlImage image : customImages) {
+			imagesByName.put(image.getName(), image);
+		}
+
+		ImmutableList.Builder<ImageClearPass> clearPasses = ImmutableList.builder();
+
+		for (ShaderPackPass passDescription : passDescriptions) {
+			if (passDescription.type() != ShaderPackPassType.CLEAR) {
+				continue;
+			}
+
+			String clearIntent = passDescription.behavior().clearIntent();
+			if (!clearIntent.startsWith("image:")) {
+				continue;
+			}
+
+			String imageName = clearIntent.substring("image:".length());
+			GlImage image = imagesByName.get(imageName);
+			if (image == null) {
+				throw new IllegalStateException("Missing custom image " + imageName + " for clear pass " + passDescription.id());
+			}
+
+			clearPasses.add(ImageClearPass.create(image));
+		}
+
+		return clearPasses.build();
 	}
 
 	private ShaderSupplier createShader(String name, Optional<ProgramSource> source, ShaderKey key, Patch patch) throws IOException {
