@@ -51,6 +51,9 @@ import net.irisshaders.iris.pbr.format.TextureFormatLoader;
 import net.irisshaders.iris.pbr.texture.PBRTextureHolder;
 import net.irisshaders.iris.pbr.texture.PBRTextureManager;
 import net.irisshaders.iris.pbr.texture.PBRType;
+import net.irisshaders.iris.pipeline.description.ShaderPackPipeline;
+import net.irisshaders.iris.pipeline.description.ShaderPackPipelineBuilder;
+import net.irisshaders.iris.pipeline.description.ShaderPackPipelineDebugDump;
 import net.irisshaders.iris.pipeline.programs.ExtendedShader;
 import net.irisshaders.iris.pipeline.programs.ShaderCreator;
 import net.irisshaders.iris.pipeline.programs.ShaderKey;
@@ -170,6 +173,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 	private final Set<GlImage> customImages;
 	private final ImmutableList<ImageClearPass> clearImages;
 	private final ShaderPack pack;
+	private final ShaderPackPipeline shaderPackPipelineDescription;
 	private final PackShadowDirectives shadowDirectives;
 	private final int stackSize = 0;
 	private final boolean skipAllRendering;
@@ -272,6 +276,7 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 
 		this.renderTargets = new RenderTargets(main.width, main.height, depthTexture, ((Blaze3dRenderTargetExt) main).iris$getDepthBufferVersion(), depthBufferFormat, programSet.getPackDirectives().getRenderTargetDirectives().getRenderTargetSettings(), programSet.getPackDirectives());
+		this.shaderPackPipelineDescription = ShaderPackPipelineBuilder.build(programSet, main.width, main.height);
 		this.sunPathRotation = programSet.getPackDirectives().getSunPathRotation();
 
 		PackShadowDirectives shadowDirectives = programSet.getPackDirectives().getShadowDirectives();
@@ -1028,6 +1033,9 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 		} else {
 			messages.addLine("[Iris] Shadow Maps: not used by shader pack");
 		}
+
+		int describedPasses = shaderPackPipelineDescription.stages().values().stream().mapToInt(java.util.List::size).sum();
+		messages.addLine("[Iris] Shaderpack pipeline description: " + describedPasses + " passes, " + shaderPackPipelineDescription.externalDrawPhases().size() + " external phases");
 	}
 
 	@Override
@@ -1174,6 +1182,14 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 	@Override
 	public ShaderMap getShaderMap() {
 		return shaderMap;
+	}
+
+	public ShaderPackPipeline getShaderPackPipelineDescription() {
+		return shaderPackPipelineDescription;
+	}
+
+	public String dumpShaderPackPipelineDescription() {
+		return ShaderPackPipelineDebugDump.dump(shaderPackPipelineDescription);
 	}
 
 	private void destroyShaders() {
