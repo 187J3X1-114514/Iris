@@ -51,6 +51,8 @@ import net.irisshaders.iris.pbr.format.TextureFormatLoader;
 import net.irisshaders.iris.pbr.texture.PBRTextureHolder;
 import net.irisshaders.iris.pbr.texture.PBRTextureManager;
 import net.irisshaders.iris.pbr.texture.PBRType;
+import net.irisshaders.iris.pipeline.description.ShaderPackPass;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassStage;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipeline;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineBuilder;
 import net.irisshaders.iris.pipeline.description.ShaderPackPipelineDebugDump;
@@ -87,7 +89,6 @@ import net.irisshaders.iris.shadows.ShadowRenderTargets;
 import net.irisshaders.iris.shadows.ShadowRenderer;
 import net.irisshaders.iris.shadows.ShadowRenderingState;
 import net.irisshaders.iris.targets.Blaze3dRenderTargetExt;
-import net.irisshaders.iris.targets.BufferFlipper;
 import net.irisshaders.iris.targets.ClearPass;
 import net.irisshaders.iris.targets.ClearPassCreator;
 import net.irisshaders.iris.targets.RenderTargets;
@@ -112,8 +113,13 @@ import org.joml.Vector4f;
 import org.lwjgl.opengl.*;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -306,8 +312,6 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 		GlStateManager._activeTexture(GL20C.GL_TEXTURE0);
 
-		BufferFlipper flipper = new BufferFlipper();
-
 		this.centerDepthSampler = new CenterDepthSampler(() -> renderTargets.getDepthTexture().iris$getGlId(), programSet.getPackDirectives().getCenterDepthHalfLife());
 
 		this.shadowMapResolution = programSet.getPackDirectives().getShadowDirectives().getResolution();
@@ -329,35 +333,35 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 		if (FullScreenQuadRenderer.init() != -1) throw new IllegalStateException("WHY");
 
-		this.beginRenderer = new CompositeRenderer(this, CompositePass.BEGIN, programSet.getPackDirectives(), programSet.getComposite(ProgramArrayId.Begin), programSet.getCompute(ProgramArrayId.Begin), renderTargets, shaderStorageBufferHolder,
-			customTextureManager.getNoiseTexture(), updateNotifier, centerDepthSampler, flipper, shadowTargetsSupplier, TextureStage.BEGIN,
+		this.beginRenderer = new CompositeRenderer(this, CompositePass.BEGIN, passesFor(ShaderPackPassStage.BEGIN), sourcesByName(programSet.getComposite(ProgramArrayId.Begin)), computesByName(programSet.getCompute(ProgramArrayId.Begin)), renderTargets, shaderStorageBufferHolder,
+			customTextureManager.getNoiseTexture(), updateNotifier, centerDepthSampler, shadowTargetsSupplier, TextureStage.BEGIN,
 			customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.BEGIN, Object2ObjectMaps.emptyMap()), customTextureManager.getIrisCustomTextures(), customImages,
-			programSet.getPackDirectives().getExplicitFlips("begin_pre"), customUniforms);
+			customUniforms);
 
-		flippedBeforeShadow = flipper.snapshot();
+		flippedBeforeShadow = ImmutableSet.copyOf(shaderPackPipelineDescription.flippedBeforeShadow());
 
-		this.prepareRenderer = new CompositeRenderer(this, CompositePass.PREPARE, programSet.getPackDirectives(), programSet.getComposite(ProgramArrayId.Prepare), programSet.getCompute(ProgramArrayId.Prepare), renderTargets, shaderStorageBufferHolder,
-			customTextureManager.getNoiseTexture(), updateNotifier, centerDepthSampler, flipper, shadowTargetsSupplier, TextureStage.PREPARE,
+		this.prepareRenderer = new CompositeRenderer(this, CompositePass.PREPARE, passesFor(ShaderPackPassStage.PREPARE), sourcesByName(programSet.getComposite(ProgramArrayId.Prepare)), computesByName(programSet.getCompute(ProgramArrayId.Prepare)), renderTargets, shaderStorageBufferHolder,
+			customTextureManager.getNoiseTexture(), updateNotifier, centerDepthSampler, shadowTargetsSupplier, TextureStage.PREPARE,
 			customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.PREPARE, Object2ObjectMaps.emptyMap()), customTextureManager.getIrisCustomTextures(), customImages,
-			programSet.getPackDirectives().getExplicitFlips("prepare_pre"), customUniforms);
+			customUniforms);
 
-		flippedAfterPrepare = flipper.snapshot();
+		flippedAfterPrepare = ImmutableSet.copyOf(shaderPackPipelineDescription.flippedAfterPrepare());
 
-		this.deferredRenderer = new CompositeRenderer(this, CompositePass.DEFERRED, programSet.getPackDirectives(), programSet.getComposite(ProgramArrayId.Deferred), programSet.getCompute(ProgramArrayId.Deferred), renderTargets, shaderStorageBufferHolder,
-			customTextureManager.getNoiseTexture(), updateNotifier, centerDepthSampler, flipper, shadowTargetsSupplier, TextureStage.DEFERRED,
+		this.deferredRenderer = new CompositeRenderer(this, CompositePass.DEFERRED, passesFor(ShaderPackPassStage.DEFERRED), sourcesByName(programSet.getComposite(ProgramArrayId.Deferred)), computesByName(programSet.getCompute(ProgramArrayId.Deferred)), renderTargets, shaderStorageBufferHolder,
+			customTextureManager.getNoiseTexture(), updateNotifier, centerDepthSampler, shadowTargetsSupplier, TextureStage.DEFERRED,
 			customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.DEFERRED, Object2ObjectMaps.emptyMap()), customTextureManager.getIrisCustomTextures(), customImages,
-			programSet.getPackDirectives().getExplicitFlips("deferred_pre"), customUniforms);
+			customUniforms);
 
-		flippedAfterTranslucent = flipper.snapshot();
+		flippedAfterTranslucent = ImmutableSet.copyOf(shaderPackPipelineDescription.flippedAfterTranslucent());
 
-		this.compositeRenderer = new CompositeRenderer(this, CompositePass.COMPOSITE, programSet.getPackDirectives(), programSet.getComposite(ProgramArrayId.Composite), programSet.getCompute(ProgramArrayId.Composite), renderTargets, shaderStorageBufferHolder,
-			customTextureManager.getNoiseTexture(), updateNotifier, centerDepthSampler, flipper, shadowTargetsSupplier, TextureStage.COMPOSITE_AND_FINAL,
+		this.compositeRenderer = new CompositeRenderer(this, CompositePass.COMPOSITE, passesFor(ShaderPackPassStage.COMPOSITE), sourcesByName(programSet.getComposite(ProgramArrayId.Composite)), computesByName(programSet.getCompute(ProgramArrayId.Composite)), renderTargets, shaderStorageBufferHolder,
+			customTextureManager.getNoiseTexture(), updateNotifier, centerDepthSampler, shadowTargetsSupplier, TextureStage.COMPOSITE_AND_FINAL,
 			customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.COMPOSITE_AND_FINAL, Object2ObjectMaps.emptyMap()), customTextureManager.getIrisCustomTextures(), customImages,
-			programSet.getPackDirectives().getExplicitFlips("composite_pre"), customUniforms);
-		this.finalPassRenderer = new FinalPassRenderer(this, programSet, renderTargets, customTextureManager.getNoiseTexture(), shaderStorageBufferHolder, updateNotifier, flipper.snapshot(),
+			customUniforms);
+		this.finalPassRenderer = new FinalPassRenderer(this, programSet, renderTargets, customTextureManager.getNoiseTexture(), shaderStorageBufferHolder, updateNotifier, ImmutableSet.copyOf(shaderPackPipelineDescription.flippedAfterComposite()),
 			centerDepthSampler, shadowTargetsSupplier,
 			customTextureManager.getCustomTextureIdMap().getOrDefault(TextureStage.COMPOSITE_AND_FINAL, Object2ObjectMaps.emptyMap()), customTextureManager.getIrisCustomTextures(), customImages,
-			this.compositeRenderer.getFlippedAtLeastOnceFinal(), customUniforms);
+			ImmutableSet.copyOf(shaderPackPipelineDescription.compositeFlippedAtLeastOnce()), customUniforms);
 
 		Supplier<ImmutableSet<Integer>> flipped =
 			() -> isBeforeTranslucent ? flippedAfterPrepare : flippedAfterTranslucent;
@@ -454,8 +458,8 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 			this.shadowClearPasses = ClearPassCreator.createShadowClearPasses(shadowRenderTargets, false, shadowDirectives);
 			this.shadowClearPassesFull = ClearPassCreator.createShadowClearPasses(shadowRenderTargets, true, shadowDirectives);
-			this.shadowCompositeRenderer = new ShadowCompositeRenderer(this, programSet.getPackDirectives(), programSet.getComposite(ProgramArrayId.ShadowComposite), programSet.getCompute(ProgramArrayId.ShadowComposite), this.shadowRenderTargets, this.shaderStorageBufferHolder, customTextureManager.getNoiseTexture(), updateNotifier,
-				customTextureManager.getCustomTextureIdMap(TextureStage.SHADOWCOMP), customImages, programSet.getPackDirectives().getExplicitFlips("shadowcomp_pre"), customTextureManager.getIrisCustomTextures(), customUniforms);
+			this.shadowCompositeRenderer = new ShadowCompositeRenderer(this, passesFor(ShaderPackPassStage.SHADOW_COMPOSITE), sourcesByName(programSet.getComposite(ProgramArrayId.ShadowComposite)), computesByName(programSet.getCompute(ProgramArrayId.ShadowComposite)), ImmutableSet.copyOf(shaderPackPipelineDescription.shadowCompositeFlippedAfter()), this.shadowRenderTargets, this.shaderStorageBufferHolder, customTextureManager.getNoiseTexture(), updateNotifier,
+				customTextureManager.getCustomTextureIdMap(TextureStage.SHADOWCOMP), customImages, customTextureManager.getIrisCustomTextures(), customUniforms);
 
 			if (programSet.getPackDirectives().getShadowDirectives().isShadowEnabled().orElse(true)) {
 				this.shadowRenderer = new ShadowRenderer(this, resolver.resolveNullable(ProgramId.ShadowSolid),
@@ -1190,6 +1194,39 @@ public class IrisRenderingPipeline implements WorldRenderingPipeline, ShaderRend
 
 	public String dumpShaderPackPipelineDescription() {
 		return ShaderPackPipelineDebugDump.dump(shaderPackPipelineDescription);
+	}
+
+	private List<ShaderPackPass> passesFor(ShaderPackPassStage stage) {
+		return shaderPackPipelineDescription.stages().getOrDefault(stage, List.of());
+	}
+
+	private static Map<String, ProgramSource> sourcesByName(ProgramSource[] sources) {
+		Map<String, ProgramSource> byName = new LinkedHashMap<>();
+
+		for (ProgramSource source : sources) {
+			if (source != null && source.isValid()) {
+				byName.put(source.getName(), source);
+			}
+		}
+
+		return Collections.unmodifiableMap(byName);
+	}
+
+	private static Map<String, ComputeSource> computesByName(ComputeSource[][] computes) {
+		Map<String, ComputeSource> byName = new LinkedHashMap<>();
+
+		for (ComputeSource[] stageComputes : computes) {
+			if (stageComputes == null) {
+				continue;
+			}
+
+			Arrays.stream(stageComputes)
+				.filter(Objects::nonNull)
+				.filter(source -> source.getSource().isPresent())
+				.forEach(source -> byName.put(source.getName(), source));
+		}
+
+		return Collections.unmodifiableMap(byName);
 	}
 
 	private void destroyShaders() {

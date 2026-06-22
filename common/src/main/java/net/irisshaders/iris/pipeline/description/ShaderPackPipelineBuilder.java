@@ -3,6 +3,7 @@ package net.irisshaders.iris.pipeline.description;
 import com.google.common.collect.ImmutableMap;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.features.FeatureFlags;
+import net.irisshaders.iris.gl.blending.BlendModeOverride;
 import net.irisshaders.iris.gl.framebuffer.ViewportData;
 import net.irisshaders.iris.pipeline.CompositePass;
 import net.irisshaders.iris.pipeline.WorldRenderingPhase;
@@ -49,6 +50,7 @@ public final class ShaderPackPipelineBuilder {
 	private Set<Integer> flippedAfterTranslucent = Set.of();
 	private Set<Integer> flippedAfterComposite = Set.of();
 	private Set<Integer> compositeFlippedAtLeastOnce = Set.of();
+	private Set<Integer> shadowCompositeFlippedAfter = Set.of();
 
 	private ShaderPackPipelineBuilder(ProgramSet programSet, int renderWidth, int renderHeight) {
 		this.programSet = programSet;
@@ -93,7 +95,18 @@ public final class ShaderPackPipelineBuilder {
 			shadowSize
 		);
 
-		return new ShaderPackPipeline(freezeStages(), List.copyOf(externalDrawPhases), resources, debugIdentity);
+		return new ShaderPackPipeline(
+			freezeStages(),
+			List.copyOf(externalDrawPhases),
+			resources,
+			debugIdentity,
+			Set.copyOf(flippedBeforeShadow),
+			Set.copyOf(flippedAfterPrepare),
+			Set.copyOf(flippedAfterTranslucent),
+			Set.copyOf(flippedAfterComposite),
+			Set.copyOf(compositeFlippedAtLeastOnce),
+			Set.copyOf(shadowCompositeFlippedAfter)
+		);
 	}
 
 	private Map<ShaderPackPassStage, List<ShaderPackPass>> freezeStages() {
@@ -192,7 +205,7 @@ public final class ShaderPackPipelineBuilder {
 				renderTargetOutputs(drawBuffers, "draw-buffer"),
 				programDescriptors(source, computeSources, arrayId.name(), null, textureStage.name()),
 				bindingDescriptor(stage, textureStage),
-				behavior(directives.getBlendModeOverride().map(Object::toString).orElse("default"), directives.getViewportScale(), directives.getMipmappedBuffers(),
+				behavior(directives.getBlendModeOverride().map(Object::toString).orElse("default"), directives.getBlendModeOverride().orElse(null), directives.getViewportScale(), directives.getMipmappedBuffers(),
 					hasComputes(computeSources), "stage-order"),
 				layout
 			));
@@ -265,11 +278,13 @@ public final class ShaderPackPipelineBuilder {
 				shadowOutputs(drawBuffers, "draw-buffer"),
 				programDescriptors(source, computeSources, ProgramArrayId.ShadowComposite.name(), null, TextureStage.SHADOWCOMP.name()),
 				bindingDescriptor(ShaderPackPassStage.SHADOW_COMPOSITE, TextureStage.SHADOWCOMP),
-				behavior(directives.getBlendModeOverride().map(Object::toString).orElse("default"), directives.getViewportScale(), directives.getMipmappedBuffers(),
+				behavior(directives.getBlendModeOverride().map(Object::toString).orElse("default"), directives.getBlendModeOverride().orElse(null), directives.getViewportScale(), directives.getMipmappedBuffers(),
 					hasComputes(computeSources), "shadow-composite-order"),
 				layout
 			));
 		}
+
+		shadowCompositeFlippedAfter = Set.copyOf(shadowFlipped);
 	}
 
 	private void buildFinalStage() {
@@ -299,7 +314,7 @@ public final class ShaderPackPipelineBuilder {
 				List.of(new ShaderPackPassResource("mainColor", ShaderPackResourceKind.MAIN_TARGET, ShaderPackResourceView.UNRESOLVED, "final-output")),
 				programDescriptors(source, finalComputes, null, ProgramId.Final.name(), TextureStage.COMPOSITE_AND_FINAL.name()),
 				bindingDescriptor(ShaderPackPassStage.FINAL, TextureStage.COMPOSITE_AND_FINAL),
-				behavior(directives.getBlendModeOverride().map(Object::toString).orElse("default"), ViewportData.defaultValue(), directives.getMipmappedBuffers(),
+				behavior(directives.getBlendModeOverride().map(Object::toString).orElse("default"), directives.getBlendModeOverride().orElse(null), ViewportData.defaultValue(), directives.getMipmappedBuffers(),
 					hasComputes(finalComputes), "finalizeLevelRendering"),
 				layout
 			));
@@ -322,7 +337,7 @@ public final class ShaderPackPipelineBuilder {
 				List.of(new ShaderPackPassResource("colortex" + buffer, ShaderPackResourceKind.COLORTEX, ShaderPackResourceView.MAIN, "restore-copy-target")),
 				List.of(),
 				emptyBindingDescriptor(passId),
-				behavior("none", ViewportData.defaultValue(), Set.of(), false, "finalizeLevelRendering:restore-flipped-buffer"),
+				behavior("none", null, ViewportData.defaultValue(), Set.of(), false, "finalizeLevelRendering:restore-flipped-buffer"),
 				layout
 			));
 		}
@@ -341,7 +356,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(new ShaderPackPassResource("mainColor", ShaderPackResourceKind.MAIN_TARGET, ShaderPackResourceView.UNRESOLVED, "fallback-copy-target")),
 			List.of(),
 			emptyBindingDescriptor(passId),
-			behavior("none", ViewportData.defaultValue(), Set.of(), false, "finalizeLevelRendering:if-final-missing"),
+			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, "finalizeLevelRendering:if-final-missing"),
 			layout
 		));
 	}
@@ -363,7 +378,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(new ShaderPackPassResource(output, ShaderPackResourceKind.DEPTHTEX, ShaderPackResourceView.UNRESOLVED, "depth-copy-target")),
 			List.of(),
 			emptyBindingDescriptor(passId),
-			behavior("none", ViewportData.defaultValue(), Set.of(), false, trigger),
+			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, trigger),
 			layout
 		));
 	}
@@ -395,7 +410,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(new ShaderPackPassResource("colortex" + buffer, ShaderPackResourceKind.COLORTEX, view, "clear " + format)),
 			List.of(),
 			emptyBindingDescriptor(passId),
-			behavior("none", ViewportData.defaultValue(), Set.of(), false, trigger),
+			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, trigger),
 			layout
 		));
 	}
@@ -426,7 +441,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(new ShaderPackPassResource("shadowcolor" + buffer, ShaderPackResourceKind.SHADOWCOLOR, view, "clear " + format)),
 			List.of(),
 			emptyBindingDescriptor(passId),
-			behavior("none", ViewportData.defaultValue(), Set.of(), false, trigger),
+			behavior("none", null, ViewportData.defaultValue(), Set.of(), false, trigger),
 			layout
 		));
 	}
@@ -449,7 +464,7 @@ public final class ShaderPackPipelineBuilder {
 				List.of(),
 				List.of(ShaderPackProgramDescriptor.compute(passId, source.getName(), idPrefix, textureStage.name())),
 				bindingDescriptor(stage, textureStage),
-				behavior("none", ViewportData.defaultValue(), Set.of(), true, trigger),
+				behavior("none", null, ViewportData.defaultValue(), Set.of(), true, trigger),
 				layout
 			));
 		}
@@ -479,7 +494,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(),
 			computeDescriptors(computeSources, arrayId, textureStage.name()),
 			bindingDescriptor(stage, textureStage),
-			behavior("none", ViewportData.defaultValue(), Set.of(), true, "stage-order"),
+			behavior("none", null, ViewportData.defaultValue(), Set.of(), true, "stage-order"),
 			layout
 		));
 	}
@@ -496,7 +511,7 @@ public final class ShaderPackPipelineBuilder {
 			List.of(),
 			List.of(),
 			emptyBindingDescriptor(passId),
-			behavior("runtime", ViewportData.defaultValue(), Set.of(), false, "minecraft-or-sodium-draw"),
+			behavior("runtime", null, ViewportData.defaultValue(), Set.of(), false, "minecraft-or-sodium-draw"),
 			layout
 		);
 	}
@@ -803,9 +818,10 @@ public final class ShaderPackPipelineBuilder {
 		return new ShaderPackBindingDescriptor("bindings:" + id, List.of(), List.of(), List.of(), List.of(), List.of());
 	}
 
-	private ShaderPackPassBehavior behavior(String blend, ViewportData viewportData, Set<Integer> mipmappedInputs, boolean hasCompute, String trigger) {
+	private ShaderPackPassBehavior behavior(String blend, BlendModeOverride blendModeOverride, ViewportData viewportData, Set<Integer> mipmappedInputs, boolean hasCompute, String trigger) {
 		return new ShaderPackPassBehavior(
 			blend,
+			blendModeOverride,
 			viewportData,
 			Set.copyOf(mipmappedInputs),
 			hasCompute ? Set.of("GL_SHADER_IMAGE_ACCESS_BARRIER_BIT", "GL_TEXTURE_FETCH_BARRIER_BIT", "GL_SHADER_STORAGE_BARRIER_BIT") : Set.of(),

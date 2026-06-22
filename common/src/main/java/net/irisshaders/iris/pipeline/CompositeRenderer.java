@@ -1,7 +1,6 @@
 package net.irisshaders.iris.pipeline;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.mojang.blaze3d.PrimitiveTopology;
 import com.mojang.blaze3d.buffers.GpuBuffer;
@@ -39,6 +38,11 @@ import net.irisshaders.iris.mixin.GlStateManagerAccessor;
 import net.irisshaders.iris.mixinterface.CustomPass;
 import net.irisshaders.iris.pathways.CenterDepthSampler;
 import net.irisshaders.iris.pathways.FullScreenQuadRenderer;
+import net.irisshaders.iris.pipeline.description.ShaderPackPass;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassLayout;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
+import net.irisshaders.iris.pipeline.description.ShaderPackProgramDescriptor;
+import net.irisshaders.iris.pipeline.description.ShaderPackResourceView;
 import net.irisshaders.iris.pipeline.transform.PatchShaderType;
 import net.irisshaders.iris.pipeline.transform.ShaderPrinter;
 import net.irisshaders.iris.pipeline.transform.TransformPatcher;
@@ -47,12 +51,8 @@ import net.irisshaders.iris.samplers.IrisSamplers;
 import net.irisshaders.iris.shaderpack.FilledIndirectPointer;
 import net.irisshaders.iris.shaderpack.programs.ComputeSource;
 import net.irisshaders.iris.shaderpack.programs.ProgramSource;
-import net.irisshaders.iris.shaderpack.properties.PackDirectives;
-import net.irisshaders.iris.shaderpack.properties.PackRenderTargetDirectives;
-import net.irisshaders.iris.shaderpack.properties.ProgramDirectives;
 import net.irisshaders.iris.shaderpack.texture.TextureStage;
 import net.irisshaders.iris.shadows.ShadowRenderTargets;
-import net.irisshaders.iris.targets.BufferFlipper;
 import net.irisshaders.iris.targets.RenderTarget;
 import net.irisshaders.iris.targets.RenderTargets;
 import net.irisshaders.iris.uniforms.CommonUniforms;
@@ -68,6 +68,7 @@ import org.lwjgl.opengl.GL43C;
 import org.lwjgl.opengl.GL46C;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -97,11 +98,11 @@ public class CompositeRenderer {
 	private final WorldRenderingPipeline pipeline;
 	private final CompositePass compositePass;
 
-	public CompositeRenderer(WorldRenderingPipeline pipeline, CompositePass compositePass, PackDirectives packDirectives, ProgramSource[] sources, ComputeSource[][] computes, RenderTargets renderTargets, ShaderStorageBufferHolder holder,
+	public CompositeRenderer(WorldRenderingPipeline pipeline, CompositePass compositePass, List<ShaderPackPass> passDescriptions, Map<String, ProgramSource> sourcesByName, Map<String, ComputeSource> computesByName, RenderTargets renderTargets, ShaderStorageBufferHolder holder,
 	                         TextureAccess noiseTexture, FrameUpdateNotifier updateNotifier,
-	                         CenterDepthSampler centerDepthSampler, BufferFlipper bufferFlipper,
+	                         CenterDepthSampler centerDepthSampler,
 	                         Supplier<ShadowRenderTargets> shadowTargetsSupplier, TextureStage textureStage,
-	                         Object2ObjectMap<String, TextureAccess> customTextureIds, Object2ObjectMap<String, TextureAccess> irisCustomTextures, Set<GlImage> customImages, ImmutableMap<Integer, Boolean> explicitPreFlips,
+	                         Object2ObjectMap<String, TextureAccess> customTextureIds, Object2ObjectMap<String, TextureAccess> irisCustomTextures, Set<GlImage> customImages,
 	                         CustomUniforms customUniforms) {
 		this.pipeline = pipeline;
 		this.compositePass = compositePass;
@@ -114,55 +115,34 @@ public class CompositeRenderer {
 		this.customImages = customImages;
 		this.textureStage = textureStage;
 
-		final PackRenderTargetDirectives renderTargetDirectives = packDirectives.getRenderTargetDirectives();
-		final Map<Integer, PackRenderTargetDirectives.RenderTargetSettings> renderTargetSettings =
-			renderTargetDirectives.getRenderTargetSettings();
-
 		final ImmutableList.Builder<Pass> passes = ImmutableList.builder();
 		final ImmutableSet.Builder<Integer> flippedAtLeastOnce = new ImmutableSet.Builder<>();
 
-		explicitPreFlips.forEach((buffer, shouldFlip) -> {
-			if (shouldFlip) {
-				bufferFlipper.flip(buffer);
-				// NB: Flipping deferred_pre or composite_pre does NOT cause the "flippedAtLeastOnce" flag to trigger
-			}
-		});
+		for (ShaderPackPass passDescription : passDescriptions) {
+			ShaderPackPassLayout layout = passDescription.layout();
+			ImmutableSet<Integer> stageReadsFromAlt = stageReadsFromAlt(layout, "colortex");
+			ImmutableSet<Integer> flippedAtLeastOnceSnapshot = ImmutableSet.copyOf(layout.flippedAtLeastOnceSnapshot());
+			flippedAtLeastOnce.addAll(layout.flippedAtLeastOnceSnapshot());
+			flippedAtLeastOnce.addAll(layout.resolvedFlips());
 
-		for (int i = 0; i < sources.length; i++) {
-			ProgramSource source = sources[i];
-
-			ImmutableSet<Integer> flipped = bufferFlipper.snapshot();
-			ImmutableSet<Integer> flippedAtLeastOnceSnapshot = flippedAtLeastOnce.build();
-
-			if (source == null || !source.isValid()) {
-				if (computes.length != 0 && computes[i] != null && computes[i].length > 0) {
-					ComputeOnlyPass pass = new ComputeOnlyPass();
-					pass.name = computes[i].length > 0 ? Arrays.stream(computes[i]).filter(Objects::nonNull).findFirst().map(ComputeSource::getName).orElse("unknown") : "unknown";
-					pass.computes = createComputes(computes[i], flipped, flippedAtLeastOnceSnapshot, shadowTargetsSupplier, holder);
-					passes.add(pass);
-				}
+			if (passDescription.type() == ShaderPackPassType.COMPUTE) {
+				ComputeOnlyPass pass = new ComputeOnlyPass();
+				pass.name = passDescription.name();
+				pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, shadowTargetsSupplier, holder);
+				passes.add(pass);
 				continue;
 			}
 
 			Pass pass = new Pass();
-			ProgramDirectives directives = source.getDirectives();
+			ProgramSource source = sourceFor(passDescription, sourcesByName);
 
-			pass.name = source.getName();
-			pass.program = createProgram(source, flipped, flippedAtLeastOnceSnapshot, shadowTargetsSupplier);
-			pass.blendModeOverride = source.getDirectives().getBlendModeOverride().orElse(null);
-			if (computes.length != 0) {
-				pass.computes = createComputes(computes[i], flipped, flippedAtLeastOnceSnapshot, shadowTargetsSupplier, holder);
-			} else {
-				pass.computes = new ComputeProgram[0];
-			}
-			int[] drawBuffers = directives.getDrawBuffers();
-
-
+			pass.name = passDescription.name();
+			pass.program = createProgram(source, stageReadsFromAlt, flippedAtLeastOnceSnapshot, shadowTargetsSupplier);
+			pass.blendModeOverride = passDescription.behavior().blendModeOverride();
+			pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, shadowTargetsSupplier, holder);
+			int[] drawBuffers = layout.drawBuffers().clone();
 			int passWidth = 0, passHeight = 0;
-			// Flip the buffers that this shader wrote to, and set pass width and height
-			ImmutableMap<Integer, Boolean> explicitFlips = directives.getExplicitFlips();
-
-			GlFramebuffer framebuffer = renderTargets.createColorFramebuffer(flipped, drawBuffers);
+			GlFramebuffer framebuffer = renderTargets.createColorFramebuffer(stageReadsFromAlt, drawBuffers);
 
 			for (int buffer : drawBuffers) {
 				RenderTarget target = renderTargets.get(buffer);
@@ -171,30 +151,15 @@ public class CompositeRenderer {
 				}
 				passWidth = target.getWidth();
 				passHeight = target.getHeight();
-
-				// compare with boxed Boolean objects to avoid NPEs
-				if (explicitFlips.get(buffer) == Boolean.FALSE) {
-					continue;
-				}
-
-				bufferFlipper.flip(buffer);
-				flippedAtLeastOnce.add(buffer);
 			}
 
-			explicitFlips.forEach((buffer, shouldFlip) -> {
-				if (shouldFlip) {
-					bufferFlipper.flip(buffer);
-					flippedAtLeastOnce.add(buffer);
-				}
-			});
-
-			pass.drawBuffers = directives.getDrawBuffers();
+			pass.drawBuffers = drawBuffers;
 			pass.viewWidth = passWidth;
 			pass.viewHeight = passHeight;
-			pass.stageReadsFromAlt = flipped;
+			pass.stageReadsFromAlt = stageReadsFromAlt;
 			pass.framebuffer = framebuffer;
-			pass.viewportScale = directives.getViewportScale();
-			pass.mipmappedBuffers = directives.getMipmappedBuffers();
+			pass.viewportScale = passDescription.behavior().viewportScale();
+			pass.mipmappedBuffers = ImmutableSet.copyOf(passDescription.behavior().mipmappedInputs());
 			pass.flippedAtLeastOnce = flippedAtLeastOnceSnapshot;
 
 			passes.add(pass);
@@ -204,6 +169,46 @@ public class CompositeRenderer {
 		this.flippedAtLeastOnceFinal = flippedAtLeastOnce.build();
 
 		GlStateManager._glBindFramebuffer(GL30C.GL_READ_FRAMEBUFFER, 0);
+	}
+
+	private static ProgramSource sourceFor(ShaderPackPass pass, Map<String, ProgramSource> sourcesByName) {
+		for (ShaderPackProgramDescriptor descriptor : pass.programDescriptors()) {
+			if (!descriptor.computeSources().isEmpty()) {
+				continue;
+			}
+
+			ProgramSource source = sourcesByName.get(descriptor.sourceName());
+			if (source != null) {
+				return source;
+			}
+		}
+
+		throw new IllegalStateException("Missing composite program source for pass " + pass.id());
+	}
+
+	private static ComputeSource[] computeSourcesFor(ShaderPackPass pass, Map<String, ComputeSource> computesByName) {
+		return pass.programDescriptors().stream()
+			.filter(descriptor -> !descriptor.computeSources().isEmpty())
+			.map(descriptor -> {
+				ComputeSource source = computesByName.get(descriptor.sourceName());
+				if (source == null) {
+					throw new IllegalStateException("Missing composite compute source " + descriptor.sourceName() + " for pass " + pass.id());
+				}
+				return source;
+			})
+			.toArray(ComputeSource[]::new);
+	}
+
+	private static ImmutableSet<Integer> stageReadsFromAlt(ShaderPackPassLayout layout, String resourcePrefix) {
+		ImmutableSet.Builder<Integer> flipped = ImmutableSet.builder();
+
+		layout.bufferInputViews().forEach((resource, view) -> {
+			if (view == ShaderPackResourceView.ALT && resource.startsWith(resourcePrefix)) {
+				flipped.add(Integer.parseInt(resource.substring(resourcePrefix.length())));
+			}
+		});
+
+		return flipped.build();
 	}
 
 	private static void setupMipmapping(net.irisshaders.iris.targets.RenderTarget target, boolean readFromAlt) {
@@ -225,23 +230,6 @@ public class CompositeRenderer {
 		IrisRenderSystem.generateMipmaps(texture, GL20C.GL_TEXTURE_2D);
 
 		target.turnOnMips(readFromAlt);
-	}
-
-	private boolean hasComputes(ComputeSource[][] computes) {
-		boolean hasCompute = false;
-
-		for (int i = 0; i < computes.length; i++) {
-			if (computes[i].length > 0) {
-				for (int j = 0; j < computes[i].length; j++) {
-					if (computes[i][j] != null) {
-						hasCompute = true;
-						break;
-					}
-				}
-			}
-		}
-
-		return hasCompute;
 	}
 
 	public ImmutableSet<Integer> getFlippedAtLeastOnceFinal() {

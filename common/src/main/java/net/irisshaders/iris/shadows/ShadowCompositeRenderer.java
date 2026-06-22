@@ -1,7 +1,6 @@
 package net.irisshaders.iris.shadows;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.mojang.blaze3d.PrimitiveTopology;
 import com.mojang.blaze3d.buffers.GpuBuffer;
@@ -29,6 +28,11 @@ import net.irisshaders.iris.mixinterface.CustomPass;
 import net.irisshaders.iris.pathways.FullScreenQuadRenderer;
 import net.irisshaders.iris.pipeline.CompositeRenderer;
 import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
+import net.irisshaders.iris.pipeline.description.ShaderPackPass;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassLayout;
+import net.irisshaders.iris.pipeline.description.ShaderPackPassType;
+import net.irisshaders.iris.pipeline.description.ShaderPackProgramDescriptor;
+import net.irisshaders.iris.pipeline.description.ShaderPackResourceView;
 import net.irisshaders.iris.pipeline.transform.PatchShaderType;
 import net.irisshaders.iris.pipeline.transform.ShaderPrinter;
 import net.irisshaders.iris.pipeline.transform.TransformPatcher;
@@ -37,9 +41,6 @@ import net.irisshaders.iris.samplers.IrisSamplers;
 import net.irisshaders.iris.shaderpack.FilledIndirectPointer;
 import net.irisshaders.iris.shaderpack.programs.ComputeSource;
 import net.irisshaders.iris.shaderpack.programs.ProgramSource;
-import net.irisshaders.iris.shaderpack.properties.PackDirectives;
-import net.irisshaders.iris.shaderpack.properties.PackRenderTargetDirectives;
-import net.irisshaders.iris.shaderpack.properties.ProgramDirectives;
 import net.irisshaders.iris.shaderpack.texture.TextureStage;
 import net.irisshaders.iris.targets.RenderTarget;
 import net.irisshaders.iris.uniforms.CommonUniforms;
@@ -51,6 +52,7 @@ import org.lwjgl.opengl.GL20C;
 import org.lwjgl.opengl.GL30C;
 import org.lwjgl.opengl.GL43C;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -69,9 +71,9 @@ public class ShadowCompositeRenderer {
 	private final WorldRenderingPipeline pipeline;
 	private final Set<GlImage> irisCustomImages;
 
-	public ShadowCompositeRenderer(WorldRenderingPipeline pipeline, PackDirectives packDirectives, ProgramSource[] sources, ComputeSource[][] computes, ShadowRenderTargets renderTargets, ShaderStorageBufferHolder holder,
+	public ShadowCompositeRenderer(WorldRenderingPipeline pipeline, List<ShaderPackPass> passDescriptions, Map<String, ProgramSource> sourcesByName, Map<String, ComputeSource> computesByName, ImmutableSet<Integer> finalFlippedBuffers, ShadowRenderTargets renderTargets, ShaderStorageBufferHolder holder,
 	                               TextureAccess noiseTexture, FrameUpdateNotifier updateNotifier,
-	                               Object2ObjectMap<String, TextureAccess> customTextureIds, Set<GlImage> customImages, ImmutableMap<Integer, Boolean> explicitPreFlips, Object2ObjectMap<String, TextureAccess> irisCustomTextures, CustomUniforms customUniforms) {
+	                               Object2ObjectMap<String, TextureAccess> customTextureIds, Set<GlImage> customImages, Object2ObjectMap<String, TextureAccess> irisCustomTextures, CustomUniforms customUniforms) {
 		this.pipeline = pipeline;
 		this.noiseTexture = noiseTexture;
 		this.renderTargets = renderTargets;
@@ -80,83 +82,97 @@ public class ShadowCompositeRenderer {
 		this.irisCustomImages = customImages;
 		this.customUniforms = customUniforms;
 
-		final PackRenderTargetDirectives renderTargetDirectives = packDirectives.getRenderTargetDirectives();
-		final Map<Integer, PackRenderTargetDirectives.RenderTargetSettings> renderTargetSettings =
-			renderTargetDirectives.getRenderTargetSettings();
-
 		final ImmutableList.Builder<Pass> passes = ImmutableList.builder();
 		final ImmutableSet.Builder<Integer> flippedAtLeastOnce = new ImmutableSet.Builder<>();
 
-		explicitPreFlips.forEach((buffer, shouldFlip) -> {
-			if (shouldFlip) {
-				renderTargets.flip(buffer);
-				// NB: Flipping deferred_pre or composite_pre does NOT cause the "flippedAtLeastOnce" flag to trigger
-			}
-		});
+		for (ShaderPackPass passDescription : passDescriptions) {
+			ShaderPackPassLayout layout = passDescription.layout();
+			ImmutableSet<Integer> stageReadsFromAlt = stageReadsFromAlt(layout);
+			ImmutableSet<Integer> flippedAtLeastOnceSnapshot = ImmutableSet.copyOf(layout.flippedAtLeastOnceSnapshot());
+			flippedAtLeastOnce.addAll(layout.flippedAtLeastOnceSnapshot());
+			flippedAtLeastOnce.addAll(layout.resolvedFlips());
 
-		for (int i = 0, sourcesLength = sources.length; i < sourcesLength; i++) {
-			ProgramSource source = sources[i];
-
-			ImmutableSet<Integer> flipped = renderTargets.snapshot();
-			ImmutableSet<Integer> flippedAtLeastOnceSnapshot = flippedAtLeastOnce.build();
-
-			if (source == null || !source.isValid()) {
-				if (computes.length > 0 && computes[i] != null) {
-					ComputeOnlyPass pass = new ComputeOnlyPass();
-					pass.computes = createComputes(computes[i], flipped, flippedAtLeastOnceSnapshot, renderTargets, holder);
-					passes.add(pass);
-				}
+			if (passDescription.type() == ShaderPackPassType.COMPUTE) {
+				ComputeOnlyPass pass = new ComputeOnlyPass();
+				pass.name = passDescription.name();
+				pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, renderTargets, holder);
+				passes.add(pass);
 				continue;
 			}
 
 			Pass pass = new Pass();
-			ProgramDirectives directives = source.getDirectives();
+			ProgramSource source = sourceFor(passDescription, sourcesByName);
+			int[] drawBuffers = layout.drawBuffers().clone();
 
-			pass.name = source.getName();
-			pass.program = createProgram(source, flipped, flippedAtLeastOnceSnapshot, renderTargets);
-			pass.blendModeOverride = source.getDirectives().getBlendModeOverride().orElse(null);
-			if (computes.length > 0) {
-				pass.computes = createComputes(computes[i], flipped, flippedAtLeastOnceSnapshot, renderTargets, holder);
-			} else {
-				pass.computes = new ComputeProgram[0];
-			}
-			int[] drawBuffers = source.getDirectives().hasUnknownDrawBuffers() ? new int[]{0, 1} : source.getDirectives().getDrawBuffers();
+			pass.name = passDescription.name();
+			pass.program = createProgram(source, stageReadsFromAlt, flippedAtLeastOnceSnapshot, renderTargets);
+			pass.blendModeOverride = passDescription.behavior().blendModeOverride();
+			pass.computes = createComputes(computeSourcesFor(passDescription, computesByName), stageReadsFromAlt, flippedAtLeastOnceSnapshot, renderTargets, holder);
+			GlFramebuffer framebuffer = renderTargets.createColorFramebuffer(stageReadsFromAlt, drawBuffers);
 
-			GlFramebuffer framebuffer = renderTargets.createColorFramebuffer(flipped, drawBuffers);
-
-			pass.stageReadsFromAlt = flipped;
+			pass.stageReadsFromAlt = stageReadsFromAlt;
 			pass.framebuffer = framebuffer;
-			pass.viewportScale = directives.getViewportScale();
-			pass.mipmappedBuffers = directives.getMipmappedBuffers();
+			pass.viewportScale = passDescription.behavior().viewportScale();
+			pass.mipmappedBuffers = ImmutableSet.copyOf(passDescription.behavior().mipmappedInputs());
 			pass.flippedAtLeastOnce = flippedAtLeastOnceSnapshot;
 
 			passes.add(pass);
-
-			ImmutableMap<Integer, Boolean> explicitFlips = directives.getExplicitFlips();
-
-			// Flip the buffers that this shader wrote to
-			for (int buffer : drawBuffers) {
-				// compare with boxed Boolean objects to avoid NPEs
-				if (explicitFlips.get(buffer) == Boolean.FALSE) {
-					continue;
-				}
-
-				renderTargets.flip(buffer);
-				flippedAtLeastOnce.add(buffer);
-			}
-
-			explicitFlips.forEach((buffer, shouldFlip) -> {
-				if (shouldFlip) {
-					renderTargets.flip(buffer);
-					flippedAtLeastOnce.add(buffer);
-				}
-			});
 		}
 
 		this.passes = passes.build();
 		this.flippedAtLeastOnceFinal = flippedAtLeastOnce.build();
 
+		syncFinalFlips(finalFlippedBuffers);
+
 		GlStateManager._glBindFramebuffer(GL30C.GL_READ_FRAMEBUFFER, 0);
+	}
+
+	private void syncFinalFlips(ImmutableSet<Integer> finalFlippedBuffers) {
+		for (int buffer = 0; buffer < renderTargets.getRenderTargetCount(); buffer++) {
+			if (renderTargets.isFlipped(buffer) != finalFlippedBuffers.contains(buffer)) {
+				renderTargets.flip(buffer);
+			}
+		}
+	}
+
+	private static ProgramSource sourceFor(ShaderPackPass pass, Map<String, ProgramSource> sourcesByName) {
+		for (ShaderPackProgramDescriptor descriptor : pass.programDescriptors()) {
+			if (!descriptor.computeSources().isEmpty()) {
+				continue;
+			}
+
+			ProgramSource source = sourcesByName.get(descriptor.sourceName());
+			if (source != null) {
+				return source;
+			}
+		}
+
+		throw new IllegalStateException("Missing shadow composite program source for pass " + pass.id());
+	}
+
+	private static ComputeSource[] computeSourcesFor(ShaderPackPass pass, Map<String, ComputeSource> computesByName) {
+		return pass.programDescriptors().stream()
+			.filter(descriptor -> !descriptor.computeSources().isEmpty())
+			.map(descriptor -> {
+				ComputeSource source = computesByName.get(descriptor.sourceName());
+				if (source == null) {
+					throw new IllegalStateException("Missing shadow composite compute source " + descriptor.sourceName() + " for pass " + pass.id());
+				}
+				return source;
+			})
+			.toArray(ComputeSource[]::new);
+	}
+
+	private static ImmutableSet<Integer> stageReadsFromAlt(ShaderPackPassLayout layout) {
+		ImmutableSet.Builder<Integer> flipped = ImmutableSet.builder();
+
+		layout.bufferInputViews().forEach((resource, view) -> {
+			if (view == ShaderPackResourceView.ALT && resource.startsWith("shadowcolor")) {
+				flipped.add(Integer.parseInt(resource.substring("shadowcolor".length())));
+			}
+		});
+
+		return flipped.build();
 	}
 
 	private static void setupMipmapping(net.irisshaders.iris.targets.RenderTarget target, boolean readFromAlt) {

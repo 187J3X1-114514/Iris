@@ -23,6 +23,12 @@ public final class ShaderPackPipelineDebugDump {
 		out.append("featureFlags=").append(identity.featureFlags()).append('\n');
 		out.append("renderSize=").append(identity.renderWidth()).append('x').append(identity.renderHeight()).append('\n');
 		out.append("shadowSize=").append(identity.shadowSize()).append('\n');
+		out.append("flippedBeforeShadow=").append(sorted(pipeline.flippedBeforeShadow())).append('\n');
+		out.append("flippedAfterPrepare=").append(sorted(pipeline.flippedAfterPrepare())).append('\n');
+		out.append("flippedAfterTranslucent=").append(sorted(pipeline.flippedAfterTranslucent())).append('\n');
+		out.append("flippedAfterComposite=").append(sorted(pipeline.flippedAfterComposite())).append('\n');
+		out.append("compositeFlippedAtLeastOnce=").append(sorted(pipeline.compositeFlippedAtLeastOnce())).append('\n');
+		out.append("shadowCompositeFlippedAfter=").append(sorted(pipeline.shadowCompositeFlippedAfter())).append('\n');
 		out.append('\n');
 
 		appendStages(out, pipeline);
